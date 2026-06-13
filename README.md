@@ -1,113 +1,221 @@
-# Amazon Now AI Shopping Agent + ReStock AI
+# Amazon Now
 
-A full-stack MERN e-commerce application with AI-powered shopping and smart replenishment.
+Amazon Now is a full-stack shopping demo that combines a normal e-commerce storefront with two local AI-style workflows:
 
-## Features
+- an AI shopping assistant that turns prompts into product recommendations and a cart
+- a restock dashboard that predicts when household items will run out
 
-### 🤖 AI Shopping Agent
-- Natural language shopping: "Movie night for 4 people", "Baby has fever"
-- Prompt → Product DB + AI → Matched Products → Ready Cart
-- Mission templates for quick one-tap shopping sessions
-- Smart ranking by delivery speed, relevance, price, and preferences
+The codebase is designed to be understandable from scratch. Backend logic is split into small Express routes and services, while the frontend uses React, Vite, Zustand, and Axios.
 
-### 📦 ReStock AI
-- Track consumable products with predicted depletion dates
-- Visual dashboard with color-coded urgency levels
-- Calendar view of upcoming restocks
-- Feedback learning (finished early / still have plenty)
-- Budget tracking and analytics
-- One-click bundle restock for all due items
+## What This Project Does
 
-### 🛒 E-Commerce Core
-- Full product catalog with search, filter, and categories
-- Product detail pages with substitutions
-- Cart management with quantity controls
-- Express checkout with address, delivery slots, payment
-- Order tracking with real-time status updates
-- Order history
-
-### 👤 User Dashboard
-- Order statistics and spending overview
-- Quick action cards for AI Agent, ReStock, Store
-- Recent orders and restock alerts
-- Profile & preferences management
-- Household settings for AI personalization
-
-### 🔧 Admin Dashboard
-- Product management (view, edit, delete)
-- Order management with fulfillment status
-- Analytics: revenue, category distribution, stock alerts
-- Low stock warnings
+- Browse products, categories, search results, cart, checkout, and order history
+- Chat with the AI shopping flow using natural language prompts
+- Generate recommendation results from the product catalog and user context
+- Track consumable items, depletion urgency, and replenishment timelines
+- Send feedback like “finished early” or “still have plenty” to improve predictions
+- Seed demo data so the app can be used locally without manual setup
 
 ## Tech Stack
 
-- **Frontend:** React 18, React Router 6, Zustand, Axios, Lucide Icons
-- **Backend:** Node.js, Express.js, MongoDB, Mongoose
-- **Auth:** JWT with bcrypt
-- **AI:** Rule-based NLP (upgradeable to LLM/OpenAI/Bedrock)
+- Frontend: React 18, React Router 6, Zustand, Axios, Vite, Tailwind CSS
+- Backend: Node.js, Express, Mongoose, MongoDB
+- Auth: JWT with bcryptjs fallback support
+- AI/ML: local JavaScript scoring, TF-IDF, simple Bayesian classification, depletion prediction, and feedback learning
+
+## Repository Layout
+
+```text
+backend/
+  server.js              Express entrypoint
+  seed.js                Seeds demo users/products/restock data
+  middleware/            Auth helpers
+  models/                Mongoose schemas
+  routes/                API endpoints
+  services/              Local AI, restock, and scoring logic
+
+frontend/
+  src/
+    api/                 Canonical API wrapper
+    api.js               Compatibility shim for older imports
+    components/          Shared UI components
+    pages/               Screens and route views
+    store/               Zustand state
+    App.jsx              Client routing
+    main.jsx             Frontend entrypoint
+```
+
+## Prerequisites
+
+- Node.js 18 or newer
+- MongoDB running locally or in Atlas
+- npm
 
 ## Setup
 
-### Prerequisites
-- Node.js 18+
-- MongoDB (local or Atlas)
+### 1. Install backend dependencies
 
-### Backend
 ```bash
 cd backend
 npm install
-npm run seed    # Seeds products, users, restock items
-npm run dev     # Starts on port 5000
 ```
 
-### Frontend
+### 2. Configure backend environment
+
+Create a `.env` file in `backend/` with at least:
+
+```bash
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/amazon_now
+JWT_SECRET=replace-this-with-a-long-random-string
+```
+
+If MongoDB is unavailable, the server still starts in a limited mode, but most data-driven features will not work correctly.
+
+### 3. Seed demo data
+
+```bash
+cd backend
+npm run seed
+```
+
+### 4. Start the backend
+
+```bash
+cd backend
+npm run dev
+```
+
+The backend listens on `http://localhost:5000` by default.
+
+### 5. Install frontend dependencies
+
 ```bash
 cd frontend
 npm install
-npm start       # Starts on port 3000
 ```
 
-### Demo Accounts
-- **Admin:** admin@amazon.com / admin123
-- **User:** user@test.com / test123
+### 6. Start the frontend
 
-## API Architecture
-
-### AI Flow
-```
-User Prompt → POST /api/ai/shop
-  → Load Product DB (all in-stock products)
-  → AI processes prompt + products + user preferences
-  → Returns valid product IDs mapped to database
-  → Frontend displays matched products
+```bash
+cd frontend
+npm run dev
 ```
 
-### Key Endpoints
-| Endpoint | Description |
-|----------|-------------|
-| POST /api/ai/shop | AI agent: prompt → products |
-| POST /api/intent/parse | Parse intent + recommend |
-| POST /api/cart/build | Create cart from product IDs |
-| POST /api/checkout/prepare | Process checkout |
-| GET /api/restock/dashboard | Restock tracker |
-| GET /api/restock/calendar | Calendar view |
-| POST /api/restock/feedback | Improve predictions |
+The frontend uses Vite and usually starts on `http://localhost:3000`. If that port is busy, Vite will move to the next free port.
 
-## Project Structure
-```
-├── backend/
-│   ├── models/          # Mongoose schemas
-│   ├── routes/          # Express routes
-│   ├── services/        # AI & business logic
-│   ├── middleware/      # Auth middleware
-│   ├── seed.js          # Database seeder
-│   └── server.js        # Express app
-├── frontend/
-│   ├── public/
-│   └── src/
-│       ├── components/  # Reusable UI components
-│       ├── pages/       # Route pages
-│       ├── api.js       # API client
-│       ├── store.js     # Zustand state
-│       └── App.js       # Router setup
-```
+## Demo Accounts
+
+- Admin: `admin@amazon.com` / `admin123`
+- User: `user@test.com` / `test123`
+
+## Main User Flows
+
+### Shopping flow
+
+1. A user enters a natural-language request in the AI dashboard.
+2. The frontend sends the prompt to `POST /api/ai/shop`.
+3. The backend loads the catalog, user profile, and intent context.
+4. The local scoring layer ranks products and returns a shopping list.
+5. The frontend can turn those results into a cart and continue to checkout.
+
+### Restock flow
+
+1. The restock dashboard loads tracked items and their predicted depletion.
+2. The backend calculates urgency, days remaining, and bundle suggestions.
+3. The user can mark items as “Finished Early” or “Still Have Plenty.”
+4. Feedback is sent to the server so future predictions improve.
+
+## API Overview
+
+### Health and model status
+
+- `GET /api/health`
+- `GET /api/ml/status`
+- `POST /api/ml/retrain`
+
+### Auth
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `PUT /api/auth/preferences`
+- `PUT /api/auth/household`
+- `PUT /api/auth/budget`
+
+### Shopping and catalog
+
+- `GET /api/catalog`
+- `GET /api/catalog/categories`
+- `GET /api/catalog/:id`
+- `POST /api/intent/parse`
+- `POST /api/recommendations/generate`
+- `POST /api/ai/shop`
+- `POST /api/ai/suggest`
+- `POST /api/ai/substitute`
+- `POST /api/ai/feedback`
+
+### Cart and checkout
+
+- `POST /api/cart/build`
+- `GET /api/cart/:id`
+- `PUT /api/cart/:id`
+- `POST /api/checkout/prepare`
+- `GET /api/orders`
+- `GET /api/orders/:id`
+
+### Restock
+
+- `GET /api/restock/dashboard`
+- `GET /api/restock/calendar`
+- `GET /api/restock/analytics`
+- `GET /api/restock/notifications`
+- `GET /api/restock/history`
+- `GET /api/restock/schedule`
+- `POST /api/restock/feedback`
+- `POST /api/restock/bundle`
+- `POST /api/restock/predict`
+
+## Important Files
+
+- `backend/services/mlCore.js`: TF-IDF ranking and Bayesian text classification
+- `backend/services/restockPredictor.js`: depletion calculation and urgency scoring
+- `backend/services/restockService.js`: dashboard data assembly
+- `backend/services/aiService.js`: AI shopping orchestration
+- `frontend/src/store/index.js`: Zustand stores for auth, cart, and intent state
+- `frontend/src/api/index.js`: canonical frontend API client
+- `frontend/src/api.js`: compatibility wrapper for older imports
+- `frontend/src/pages/AIDashboard.jsx`: AI shopping screen
+- `frontend/src/pages/RestockDashboard.jsx`: replenishment screen
+
+## Development Notes
+
+- The frontend contains several `.js` files that intentionally use JSX. Vite is configured to handle that.
+- Keep `frontend/src/api/index.js` as the source of truth for API helpers.
+- `frontend/src/api.js` exists only so older imports keep working.
+- The cart store exposes both `cartTotal` and a legacy `total` alias so older screens keep working.
+- The app’s checkout route is `/checkout`.
+- `POST /api/feedback` is used by the restock dashboard for simple learning signals.
+
+## Troubleshooting
+
+- If the frontend fails to start, make sure you are running `npm run dev` from the `frontend/` folder, not the repository root.
+- If the backend cannot connect to MongoDB, verify `MONGODB_URI` and that MongoDB is running.
+- If seeded data looks missing, rerun `npm run seed` inside `backend/`.
+- If Vite chooses a different port, use the URL printed in the terminal.
+
+## Suggested Starting Points For New Contributors
+
+If someone is reading this project for the first time, start with these files in order:
+
+1. `README.md`
+2. `backend/server.js`
+3. `backend/routes/auth.js`
+4. `backend/routes/ai.js`
+5. `backend/routes/restock.js`
+6. `frontend/src/store/index.js`
+7. `frontend/src/App.jsx`
+8. `frontend/src/pages/AIDashboard.jsx`
+9. `frontend/src/pages/RestockDashboard.jsx`
+
+That path explains the app from the server entrypoint to the main user-facing screens.

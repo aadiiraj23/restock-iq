@@ -10,10 +10,10 @@ const express = require('express');
 const Product = require('../models/Product');
 const IntentRequest = require('../models/IntentRequest');
 const User = require('../models/User');
-const { processPromptWithAI, generateSuggestions } = require('../services/aiService');
+const { processPromptWithAI, processAIShoppingRequest, generateSuggestions } = require('../services/aiService');
 const { scoreSubstitutes } = require('../services/scoringEngine');
 const { processFeedback } = require('../services/feedbackLearner');
-const { authOptional } = require('../middleware/auth');
+const { authRequired, authOptional } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -22,83 +22,56 @@ const router = express.Router();
  * Main AI Shopping endpoint — the core "smart agent" experience.
  * Takes a user prompt and returns intelligently ranked products from the database.
  */
-router.post('/shop', authOptional, async (req, res) => {
+router.post('/shop', authRequired, async (req, res) => {
   try {
-    const { prompt, filters } = req.body;
-    if (!prompt || !prompt.trim()) {
-      return res.status(400).json({ error: 'Prompt is required' });
+    const { user_prompt, userId, filters = {} } = req.body;
+    const prompt = String(user_prompt || '').trim();
+    if (!prompt) {
+      return res.status(400).json({ error: 'user_prompt is required' });
     }
 
-    // Step 1: Load product database (the "context" for AI)
-    let productQuery = { stock: { $gt: 0 } };
-    if (filters?.category) productQuery.category = filters.category;
-    const allProducts = await Product.find(productQuery);
-
-    // Step 2: Get user preferences for personalization
-    let userPrefs = {};
-    if (req.user?.id) {
-      const user = await User.findById(req.user.id);
-      userPrefs = user?.preferences || {};
+    if (userId && String(userId) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'userId does not match the authenticated session' });
     }
 
-    // Step 3: Run the full AI pipeline (NLP → Score → Rank → Explain)
-    const aiResult = await processPromptWithAI(prompt, allProducts, userPrefs, req.user?.id);
+    const activeUserId = String(req.user.id);
+    const [allProducts, activeUser] = await Promise.all([
+      Product.find({}).lean(),
+      User.findById(activeUserId).select('-password').lean()
+    ]);
 
-    // Step 4: Validate product IDs exist in our database
-    const validProducts = aiResult.products.filter(p => p._id);
-
-    // Step 5: Store the intent for learning
-    const intent = await IntentRequest.create({
-      userId: req.user?.id,
-      rawText: prompt,
-      parsedIntent: aiResult.analysis.intent,
-      category: aiResult.analysis.categories[0] || 'general',
-      urgency: aiResult.analysis.urgency,
-      quantity: aiResult.analysis.quantity,
-      confidence: aiResult.analysis.confidence,
-      occasion: aiResult.analysis.occasion,
-      recommendedProductIds: validProducts.map(p => p._id)
+    const requestResult = await processAIShoppingRequest({
+      user_prompt: prompt,
+      userId: activeUserId,
+      products: allProducts,
+      userProfile: activeUser || {},
+      filters
     });
 
-    // Step 6: Return comprehensive results to frontend
+    const intent = await IntentRequest.create({
+      userId: activeUserId,
+      rawText: prompt,
+      parsedIntent: requestResult.intentSummary.parsedIntent,
+      category: requestResult.intentSummary.categories?.[0] || 'general',
+      urgency: requestResult.intentSummary.urgency,
+      quantity: requestResult.intentSummary.quantity,
+      confidence: requestResult.intentSummary.confidence,
+      occasion: requestResult.intentSummary.occasion,
+      recommendedProductIds: requestResult.products.map(p => p._id).filter(Boolean)
+    });
+
     res.json({
       success: true,
       intentId: intent._id,
-      prompt,
-      analysis: {
-        ...aiResult.analysis,
-        // Remove internal fields
-        alsoNeeded: undefined
-      },
-      products: validProducts.map(p => ({
-        _id: p._id,
-        name: p.name,
-        brand: p.brand,
-        category: p.category,
-        price: p.price,
-        originalPrice: p.originalPrice,
-        image: p.image,
-        rating: p.rating,
-        reviewCount: p.reviewCount,
-        deliveryETA: p.deliveryETA,
-        stock: p.stock,
-        isPrime: p.isPrime,
-        size: p.size,
-        description: p.description,
-        tags: p.tags,
-        aiScore: p._aiScore,
-        rankReason: p.rankReason,
-        signals: p._signals // Expose scoring breakdown for transparency
-      })),
-      // New: "You might also need" section
-      alsoNeeded: aiResult.analysis.alsoNeeded || [],
-      // Parsed NLP slots (useful for UI display)
-      parsedSlots: aiResult.parsedSlots,
+      intentSummary: requestResult.intentSummary,
+      products: requestResult.products,
+      alsoNeeded: requestResult.alsoNeeded,
+      parsedSlots: requestResult.parsedSlots,
       meta: {
         totalProductsSearched: allProducts.length,
-        matchesFound: validProducts.length,
-        processingMethod: 'multi_signal_nlp_v2',
-        scoringWeights: aiResult.analysis.urgency === 'high' ? 'urgent' : (aiResult.analysis.budget ? 'budget' : 'default')
+        matchesFound: requestResult.products.length,
+        processingMethod: 'processAIShoppingRequest',
+        authenticatedUserId: activeUserId
       }
     });
   } catch (err) {

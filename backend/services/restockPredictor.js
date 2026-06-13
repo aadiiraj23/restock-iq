@@ -87,6 +87,10 @@ const CONSUMPTION_MODELS = {
 
 const USAGE_LEVEL_FACTORS = { low: 1.4, medium: 1.0, high: 0.65 };
 
+const PERSONAL_ITEM_CATEGORIES = new Set(['personal_care', 'medicine', 'baby']);
+const SHARED_ITEM_CATEGORIES = new Set(['pantry', 'cleaning', 'household', 'groceries', 'snacks', 'travel', 'office']);
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
 // ML Integration for time-series prediction
 let mlModels = null;
 try {
@@ -94,6 +98,90 @@ try {
 } catch { /* ML not loaded yet */ }
 
 // ─── Core Prediction Engine ──────────────────────────────────────────────────
+
+function calculateExponentialSmoothing(purchaseHistory = [], startingVelocity = 1) {
+  const events = normaliseHistoryEvents(purchaseHistory)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (events.length === 0) {
+    return {
+      velocity: startingVelocity,
+      smoothedVelocity: startingVelocity,
+      bayesianVelocity: 1,
+      earlySignals: 0,
+      plentySignals: 0,
+      sampleSize: 0
+    };
+  }
+
+  const smoothingAlpha = 0.35;
+  let smoothedVelocity = startingVelocity;
+  let earlySignals = 0;
+  let plentySignals = 0;
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    const recencyWeight = Math.pow(0.85, events.length - 1 - i);
+
+    if (event.signal === 'finished_early') {
+      earlySignals += recencyWeight;
+      smoothedVelocity = smoothingAlpha * 0.85 + (1 - smoothingAlpha) * smoothedVelocity;
+    } else if (event.signal === 'still_have_plenty') {
+      plentySignals += recencyWeight;
+      smoothedVelocity = smoothingAlpha * 1.15 + (1 - smoothingAlpha) * smoothedVelocity;
+    }
+  }
+
+  const bayesianVelocity = (plentySignals + 1) / (earlySignals + 1);
+  const velocity = clampNumber(((smoothedVelocity + bayesianVelocity) / 2), 0.4, 2.5);
+
+  return {
+    velocity,
+    smoothedVelocity,
+    bayesianVelocity,
+    earlySignals: Math.round(earlySignals * 1000) / 1000,
+    plentySignals: Math.round(plentySignals * 1000) / 1000,
+    sampleSize: events.length
+  };
+}
+
+function calculateDepletion(purchaseHistory = [], householdProfile = {}, productLifespan = 0) {
+  const now = new Date();
+  const baseLifespan = resolveBaseLifespan(productLifespan);
+  const category = resolveCategory(productLifespan);
+  const householdSize = Math.max(1, parseInt(householdProfile.household_size ?? householdProfile.size ?? 1, 10) || 1);
+  const isSharedItem = resolveSharingMode(productLifespan, category);
+  const householdScale = isSharedItem ? householdSize : 1;
+  const smoothing = calculateExponentialSmoothing(purchaseHistory, 1);
+  const referenceDate = getMostRecentHistoryDate(purchaseHistory) || now;
+  const elapsedDays = Math.max(0, (now.getTime() - referenceDate.getTime()) / MS_PER_DAY);
+  const adjustedLifespan = Math.max(0, (baseLifespan / householdScale) * smoothing.velocity);
+  const preciseDaysRemaining = Math.max(0, adjustedLifespan - elapsedDays);
+  const daysRemaining = Math.round(preciseDaysRemaining * 100) / 100;
+  const urgencyTier = daysRemaining <= 2 ? 'CRITICAL' : daysRemaining <= 5 ? 'WARNING' : 'SAFE';
+  const legacyUrgency = urgencyTier === 'CRITICAL' ? 'danger' : urgencyTier === 'WARNING' ? 'warning' : 'safe';
+
+  return {
+    days_remaining: daysRemaining,
+    daysRemaining,
+    urgency: legacyUrgency,
+    urgency_tier: urgencyTier,
+    expectedFinishDate: addDays(now, daysRemaining),
+    totalLifespan: Math.round(adjustedLifespan * 100) / 100,
+    baseLifespan,
+    householdSize,
+    householdScale,
+    velocity: Math.round(smoothing.velocity * 1000) / 1000,
+    smoothing: {
+      smoothedVelocity: Math.round(smoothing.smoothedVelocity * 1000) / 1000,
+      bayesianVelocity: Math.round(smoothing.bayesianVelocity * 1000) / 1000,
+      earlySignals: smoothing.earlySignals,
+      plentySignals: smoothing.plentySignals,
+      sampleSize: smoothing.sampleSize
+    },
+    calculatedAt: now.toISOString()
+  };
+}
 
 /**
  * Predict depletion for a product given household context and history.
@@ -109,78 +197,118 @@ try {
 function predictDepletion(product, household = {}, purchaseDate = new Date(), quantity = 1, feedbackHistory = []) {
   const category = product.category || 'household';
   const model = CONSUMPTION_MODELS[category] || CONSUMPTION_MODELS.household;
+  const purchaseHistory = Array.isArray(feedbackHistory)
+    ? feedbackHistory.map((feedback, index) => ({
+        ...feedback,
+        type: feedback?.type || feedback?.signal || feedback?.status || null,
+        date: feedback?.date || feedback?.timestamp || purchaseDate,
+        index
+      }))
+    : [];
 
-  // Step 1: Base lifespan (from product or category default)
-  let basedays = product.avgLifespanDays || model.baseLifespanDays;
+  const depletion = calculateDepletion(purchaseHistory, household, {
+    category,
+    baseLifespanDays: product.avgLifespanDays || model.baseLifespanDays,
+    shared: model.householdScaling !== 'none'
+  });
 
-  // Step 2: Apply quantity multiplier
-  basedays *= quantity;
-
-  // Step 3: Household scaling
-  const householdSize = Math.max(1, household.size || 1);
-  switch (model.householdScaling) {
-    case 'per_person':
-      basedays = basedays / householdSize;
-      break;
-    case 'sqrt':
-      basedays = basedays / Math.sqrt(householdSize);
-      break;
-    case 'none':
-    default:
-      break;
-  }
-
-  // Step 4: Usage level adjustment
-  const usageFactor = USAGE_LEVEL_FACTORS[household.usageLevel] || 1.0;
-  basedays *= usageFactor;
-
-  // Step 5: Seasonal adjustment
-  const currentMonth = new Date().getMonth();
-  const season = getSeason(currentMonth);
-  const seasonFactor = model.seasonalFactors[season] || model.seasonalFactors.default || 1.0;
-  basedays *= seasonFactor;
-
-  // Step 6: Bayesian update from feedback history
-  const feedbackAdjustment = computeFeedbackAdjustment(feedbackHistory);
-  basedays *= feedbackAdjustment;
-
-  // Step 7: Apply depletion curve for remaining days calculation
-  const daysSincePurchase = Math.max(0, (Date.now() - new Date(purchaseDate).getTime()) / (1000 * 60 * 60 * 24));
-  const totalLifespan = Math.round(basedays);
-  const rawRemaining = totalLifespan - daysSincePurchase;
-  const daysRemaining = Math.max(0, Math.round(applyCurve(rawRemaining, totalLifespan, daysSincePurchase, model.depletionCurve)));
-
-  // Step 8: Calculate finish date
+  const daysSincePurchase = Math.max(0, (Date.now() - new Date(purchaseDate).getTime()) / MS_PER_DAY);
+  const rawRemaining = Math.max(0, depletion.totalLifespan - daysSincePurchase);
+  const curvedRemaining = Math.max(0, Math.round(applyCurve(rawRemaining, Math.max(1, depletion.totalLifespan), daysSincePurchase, model.depletionCurve) * 100) / 100);
   const expectedFinishDate = new Date();
-  expectedFinishDate.setDate(expectedFinishDate.getDate() + daysRemaining);
+  expectedFinishDate.setDate(expectedFinishDate.getDate() + curvedRemaining);
 
-  // Step 9: Confidence (decreases with variance and time)
   const baseConfidence = 0.90;
-  const variancePenalty = model.variancePercent / 200; // 0-0.2
-  const timePenalty = Math.min(0.15, daysSincePurchase / (totalLifespan * 5)); // Decays over time
-  const feedbackBoost = Math.min(0.1, feedbackHistory.length * 0.02); // More feedback = more confident
+  const variancePenalty = model.variancePercent / 200;
+  const timePenalty = Math.min(0.15, daysSincePurchase / (Math.max(1, depletion.totalLifespan) * 5));
+  const feedbackBoost = Math.min(0.1, purchaseHistory.length * 0.02);
   const confidence = Math.max(0.5, Math.min(0.98, baseConfidence - variancePenalty - timePenalty + feedbackBoost));
-
-  // Step 10: Urgency classification
-  let urgency = 'safe';
-  if (daysRemaining <= 2) urgency = 'danger';
-  else if (daysRemaining <= 5) urgency = 'warning';
-  else if (daysRemaining <= 7 && model.depletionCurve === 'accelerating') urgency = 'warning'; // Fast-depleting items get earlier warning
-
-  // Step 11: Daily consumption rate
-  const dailyRate = totalLifespan > 0 ? (1 / totalLifespan) * 100 : 0; // % per day
 
   return {
     expectedFinishDate,
-    daysRemaining,
-    totalLifespan,
+    daysRemaining: curvedRemaining,
+    days_remaining: curvedRemaining,
+    totalLifespan: Math.round(depletion.totalLifespan * 100) / 100,
     confidence: Math.round(confidence * 100) / 100,
-    urgency,
-    dailyRate: Math.round(dailyRate * 10) / 10,
+    urgency: depletion.urgency,
+    urgency_tier: depletion.urgency_tier,
+    dailyRate: depletion.totalLifespan > 0 ? Math.round((1 / depletion.totalLifespan) * 1000) / 10 : 0,
     depletionModel: model.depletionCurve,
-    seasonalEffect: season,
-    feedbackLearned: feedbackHistory.length > 0
+    seasonalEffect: getSeason(new Date().getMonth()),
+    feedbackLearned: purchaseHistory.length > 0,
+    velocity: depletion.velocity,
+    mlPowered: false
   };
+}
+
+function normaliseHistoryEvents(purchaseHistory) {
+  if (!Array.isArray(purchaseHistory)) return [];
+
+  return purchaseHistory
+    .map((entry, index) => {
+      const type = String(entry?.type || entry?.signal || entry?.status || entry?.feedback || entry?.note || '').toLowerCase();
+      let signal = null;
+      if (type.includes('finished') && type.includes('early')) signal = 'finished_early';
+      else if (type.includes('still') && type.includes('plenty')) signal = 'still_have_plenty';
+      else if (type === 'finished_early' || type === 'still_have_plenty') signal = type;
+
+      const timestamp = resolveEntryDate(entry, index);
+      return signal ? { signal, timestamp } : null;
+    })
+    .filter(Boolean);
+}
+
+function resolveEntryDate(entry, fallbackIndex = 0) {
+  const candidate = entry?.date || entry?.timestamp || entry?.createdAt || entry?.purchaseDate || entry?.updatedAt;
+  const parsed = candidate ? new Date(candidate) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) return parsed;
+  return new Date(Date.now() - fallbackIndex * MS_PER_DAY);
+}
+
+function getMostRecentHistoryDate(purchaseHistory) {
+  if (!Array.isArray(purchaseHistory) || purchaseHistory.length === 0) return null;
+  let latest = null;
+  for (let i = 0; i < purchaseHistory.length; i++) {
+    const candidate = resolveEntryDate(purchaseHistory[i], i);
+    if (!latest || candidate > latest) latest = candidate;
+  }
+  return latest;
+}
+
+function resolveBaseLifespan(productLifespan) {
+  if (typeof productLifespan === 'number') return Math.max(0, productLifespan);
+  if (!productLifespan || typeof productLifespan !== 'object') return 0;
+  return Math.max(0, productLifespan.baseLifespanDays ?? productLifespan.lifespanDays ?? productLifespan.lifespan ?? 0);
+}
+
+function resolveCategory(productLifespan) {
+  if (!productLifespan || typeof productLifespan !== 'object') return 'household';
+  return String(productLifespan.category || 'household').toLowerCase();
+}
+
+function resolveSharingMode(productLifespan, category) {
+  if (productLifespan && typeof productLifespan === 'object') {
+    if (productLifespan.shared === true || productLifespan.isShared === true || productLifespan.personal === false) {
+      return true;
+    }
+    if (productLifespan.shared === false || productLifespan.isShared === false || productLifespan.personal === true) {
+      return false;
+    }
+  }
+
+  if (PERSONAL_ITEM_CATEGORIES.has(category)) return false;
+  if (SHARED_ITEM_CATEGORIES.has(category)) return true;
+  return true;
+}
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function addDays(baseDate, days) {
+  const result = new Date(baseDate);
+  result.setDate(result.getDate() + days);
+  return result;
 }
 
 /**
@@ -385,6 +513,8 @@ function generateSmartNotifications(items, userProfile = {}) {
 }
 
 module.exports = {
+  calculateDepletion,
+  calculateExponentialSmoothing,
   predictDepletion,
   generateRestockSchedule,
   generateSmartNotifications,

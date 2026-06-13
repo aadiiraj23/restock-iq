@@ -6,10 +6,17 @@ import App from './App';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <App />
-      <Toaster position="bottom-right" toastOptions={{ duration: 3000 }} />
-    </BrowserRouter>
-  </React.StrictMode>
+  React.createElement(
+    React.StrictMode,
+    null,
+    React.createElement(
+      BrowserRouter,
+      null,
+      React.createElement(App, null),
+      React.createElement(Toaster, {
+        position: 'bottom-right',
+        toastOptions: { duration: 3000 }
+      })
+    )
+  )
 );

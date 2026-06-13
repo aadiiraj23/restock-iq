@@ -17,80 +17,120 @@
 
 class TfIdfVectorizer {
   constructor() {
-    this.vocabulary = new Map(); // term → index
-    this.idf = new Map();       // term → idf score
+    this.vocabulary = new Map();
+    this.idf = new Map();
+    this.productVectors = new Map();
+    this.products = [];
     this.docCount = 0;
   }
 
-  /**
-   * Fit the vectorizer on a corpus of documents.
-   * @param {string[]} documents - Array of text documents
-   */
-  fit(documents) {
-    const df = new Map(); // document frequency
+  fit(products) {
+    const documents = Array.isArray(products) ? products : [];
+    this.vocabulary.clear();
+    this.idf.clear();
+    this.productVectors.clear();
+    this.products = [];
     this.docCount = documents.length;
 
-    for (const doc of documents) {
-      const terms = this._tokenize(doc);
-      const uniqueTerms = new Set(terms);
-      for (const term of uniqueTerms) {
-        df.set(term, (df.get(term) || 0) + 1);
+    const normalisedDocs = documents.map((product, index) => {
+      const productId = this._getProductId(product, index);
+      const text = this._buildProductText(product);
+      const tokens = this._tokenize(text);
+
+      return {
+        productId,
+        tokens,
+        text
+      };
+    });
+
+    const documentFrequency = new Map();
+    for (const doc of normalisedDocs) {
+      const uniqueTokens = new Set(doc.tokens);
+      for (const token of uniqueTokens) {
+        documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
       }
     }
 
-    // Build vocabulary and IDF
-    let idx = 0;
-    for (const [term, freq] of df.entries()) {
-      if (freq >= 1) { // Keep all terms for small corpora
-        this.vocabulary.set(term, idx++);
-        // Smoothed IDF: log((N + 1) / (df + 1)) + 1
-        this.idf.set(term, Math.log((this.docCount + 1) / (freq + 1)) + 1);
-      }
+    const sortedTerms = [...documentFrequency.keys()].sort();
+    sortedTerms.forEach((term, index) => {
+      const frequency = documentFrequency.get(term) || 0;
+      this.vocabulary.set(term, index);
+      this.idf.set(term, Math.log((this.docCount + 1) / (frequency + 1)) + 1);
+    });
+
+    this.products = normalisedDocs.map(doc => ({
+      productId: doc.productId,
+      text: doc.text
+    }));
+
+    for (const doc of normalisedDocs) {
+      const vector = this._vectoriseTokens(doc.tokens);
+      this.productVectors.set(doc.productId, vector);
     }
   }
 
-  /**
-   * Transform a document into a TF-IDF vector (sparse representation).
-   * @param {string} document
-   * @returns {Map<number, number>} sparse vector (index → tfidf score)
-   */
   transform(document) {
-    const terms = this._tokenize(document);
-    const tf = new Map();
-    for (const term of terms) {
-      tf.set(term, (tf.get(term) || 0) + 1);
+    return this._vectoriseTokens(this._tokenize(document));
+  }
+
+  similarity(query, document) {
+    return cosineSimilarity(this.transform(query), this.transform(document));
+  }
+
+  scoreRelevance(userQuery) {
+    const queryVector = this.transform(userQuery);
+    const scores = new Map();
+
+    for (const [productId, productVector] of this.productVectors.entries()) {
+      scores.set(productId, cosineSimilarity(queryVector, productVector));
+    }
+
+    return scores;
+  }
+
+  _vectoriseTokens(tokens) {
+    const tokenCounts = new Map();
+    for (const token of tokens) {
+      if (!this.vocabulary.has(token)) continue;
+      tokenCounts.set(token, (tokenCounts.get(token) || 0) + 1);
     }
 
     const vector = new Map();
-    const maxTf = Math.max(...tf.values(), 1);
+    if (tokenCounts.size === 0) return vector;
 
-    for (const [term, count] of tf.entries()) {
-      const idx = this.vocabulary.get(term);
-      if (idx !== undefined) {
-        // Normalized TF * IDF
-        const normalizedTf = 0.5 + 0.5 * (count / maxTf);
-        const idfScore = this.idf.get(term) || 1;
-        vector.set(idx, normalizedTf * idfScore);
-      }
+    const maxCount = Math.max(...tokenCounts.values(), 1);
+    for (const [token, count] of tokenCounts.entries()) {
+      const index = this.vocabulary.get(token);
+      const idfScore = this.idf.get(token) || 0;
+      const tf = count / maxCount;
+      vector.set(index, tf * idfScore);
     }
+
     return vector;
   }
 
-  /**
-   * Compute similarity between a query and a document using TF-IDF.
-   * Returns 0-1 score.
-   */
-  similarity(query, document) {
-    const qVec = this.transform(query);
-    const dVec = this.transform(document);
-    return cosineSimilarity(qVec, dVec);
+  _buildProductText(product) {
+    if (typeof product === 'string') return product;
+
+    const tags = Array.isArray(product?.tags) ? product.tags.join(' ') : '';
+    return [product?.name, product?.brand, tags]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  _getProductId(product, fallbackIndex) {
+    if (typeof product === 'string') return String(fallbackIndex);
+    return String(product?._id ?? product?.id ?? product?.productId ?? fallbackIndex);
   }
 
   _tokenize(text) {
-    return (text || '').toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
       .split(/\s+/)
-      .filter(w => w.length > 1);
+      .filter(Boolean);
   }
 }
 
@@ -377,25 +417,37 @@ class CollaborativeFilter {
 
 class NaiveBayesClassifier {
   constructor() {
-    this.classCounts = new Map();   // class → count
-    this.featureCounts = new Map(); // class → Map(feature → count)
+    this.classCounts = new Map();
+    this.featureCounts = new Map();
+    this.featureTotals = new Map();
+    this.classOrder = [];
     this.totalDocs = 0;
     this.vocabulary = new Set();
+    this.defaultCategory = 'general';
   }
 
-  /**
-   * Train on labeled examples.
-   * @param {Array<{text: string, label: string}>} examples
-   */
-  train(examples) {
-    for (const { text, label } of examples) {
-      this.totalDocs++;
-      this.classCounts.set(label, (this.classCounts.get(label) || 0) + 1);
+  train(products) {
+    const items = Array.isArray(products) ? products : [];
 
-      if (!this.featureCounts.has(label)) this.featureCounts.set(label, new Map());
-      const features = this.featureCounts.get(label);
+    for (const item of items) {
+      const label = this._getLabel(item);
+      if (!label) continue;
 
+      const text = this._buildTrainingText(item);
       const tokens = this._tokenize(text);
+
+      this.totalDocs += 1;
+      this.classCounts.set(label, (this.classCounts.get(label) || 0) + 1);
+      this.featureTotals.set(label, (this.featureTotals.get(label) || 0) + tokens.length);
+
+      if (!this.featureCounts.has(label)) {
+        this.featureCounts.set(label, new Map());
+      }
+      if (!this.classOrder.includes(label)) {
+        this.classOrder.push(label);
+      }
+
+      const features = this.featureCounts.get(label);
       for (const token of tokens) {
         this.vocabulary.add(token);
         features.set(token, (features.get(token) || 0) + 1);
@@ -403,44 +455,74 @@ class NaiveBayesClassifier {
     }
   }
 
-  /**
-   * Predict class for new text with probabilities.
-   * @param {string} text
-   * @returns {Array<{label: string, probability: number}>}
-   */
-  predict(text) {
-    const tokens = this._tokenize(text);
-    const vocabSize = this.vocabulary.size;
+  predict(queryText) {
+    const ranked = this.predictProba(queryText);
+    return ranked[0]?.label || this.defaultCategory;
+  }
+
+  predictProba(queryText) {
+    const classLabels = this.classOrder.length > 0 ? this.classOrder : [...this.classCounts.keys()];
+    if (classLabels.length === 0 || this.totalDocs === 0) {
+      return [{ label: this.defaultCategory, probability: 1 }];
+    }
+
+    const tokens = this._tokenize(queryText);
+    const vocabSize = Math.max(1, this.vocabulary.size);
     const scores = [];
 
-    for (const [label, classCount] of this.classCounts.entries()) {
-      // Log prior
-      let logProb = Math.log(classCount / this.totalDocs);
+    for (const label of classLabels) {
+      const classDocCount = this.classCounts.get(label) || 0;
+      const tokenCounts = this.featureCounts.get(label) || new Map();
+      const totalTokens = this.featureTotals.get(label) || 0;
 
-      const features = this.featureCounts.get(label);
-      const totalFeatures = [...features.values()].reduce((s, v) => s + v, 0);
+      let logProb = Math.log((classDocCount + 1) / (this.totalDocs + classLabels.length));
 
-      // Log likelihood with Laplace smoothing
       for (const token of tokens) {
-        const featureCount = features.get(token) || 0;
-        logProb += Math.log((featureCount + 1) / (totalFeatures + vocabSize));
+        const tokenCount = tokenCounts.get(token) || 0;
+        logProb += Math.log((tokenCount + 1) / (totalTokens + vocabSize));
       }
 
       scores.push({ label, logProb });
     }
 
-    // Convert to probabilities via softmax
-    const maxLog = Math.max(...scores.map(s => s.logProb));
-    const expScores = scores.map(s => ({ ...s, exp: Math.exp(s.logProb - maxLog) }));
-    const sumExp = expScores.reduce((s, e) => s + e.exp, 0);
+    const maxLog = Math.max(...scores.map(score => score.logProb));
+    const expScores = scores.map(score => ({
+      label: score.label,
+      exp: Math.exp(score.logProb - maxLog)
+    }));
+    const sumExp = expScores.reduce((sum, entry) => sum + entry.exp, 0) || 1;
 
     return expScores
-      .map(s => ({ label: s.label, probability: Math.round((s.exp / sumExp) * 1000) / 1000 }))
+      .map(entry => ({
+        label: entry.label,
+        probability: Math.round((entry.exp / sumExp) * 1000) / 1000
+      }))
       .sort((a, b) => b.probability - a.probability);
   }
 
+  _buildTrainingText(item) {
+    if (typeof item === 'string') return item;
+
+    if (typeof item?.text === 'string') return item.text;
+
+    const tags = Array.isArray(item?.tags) ? item.tags.join(' ') : '';
+    return [item?.name, item?.brand, tags, item?.description]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  _getLabel(item) {
+    if (typeof item === 'string') return this.defaultCategory;
+    return item?.category || item?.label || item?.intent || null;
+  }
+
   _tokenize(text) {
-    return (text || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
   }
 }
 
@@ -496,14 +578,19 @@ function findSimilarProducts(targetProduct, allProducts, topK = 5) {
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const tfIdfEngine = new TfIdfVectorizer();
+const categorizerEngine = new NaiveBayesClassifier();
+
 module.exports = {
   TfIdfVectorizer,
+  NaiveBayesClassifier,
+  tfIdfEngine,
+  categorizerEngine,
   cosineSimilarity,
   denseCosineSimilarity,
   ExponentialSmoother,
   ThompsonSampler,
   CollaborativeFilter,
-  NaiveBayesClassifier,
   productToVector,
   findSimilarProducts
 };

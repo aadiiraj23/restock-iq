@@ -3,7 +3,7 @@ const RestockItem = require('../models/RestockItem');
 const Product = require('../models/Product');
 const Notification = require('../models/Notification');
 const Cart = require('../models/Cart');
-const { calculateDepletion, adjustFromFeedback, getBudgetAnalytics, getRestockSchedule, getSmartNotifications } = require('../services/restockService');
+const { calculateDepletion, adjustFromFeedback, getBudgetAnalytics, getRestockSchedule, getSmartNotifications, generateUserRestockDashboard } = require('../services/restockService');
 const { authOptional, authRequired } = require('../middleware/auth');
 const User = require('../models/User');
 
@@ -52,32 +52,23 @@ router.post('/items', authOptional, async (req, res) => {
 
 // ─── Dashboard (with prediction refresh) ─────────────────────────────────────
 
-router.get('/dashboard', authOptional, async (req, res) => {
-  const filter = req.user?.id ? { userId: req.user.id, isWishlist: false } : {};
-  let items = await RestockItem.find(filter).populate('productId').sort({ daysRemaining: 1 });
+router.get('/dashboard', authRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [items, user] = await Promise.all([
+      RestockItem.find({ userId, isWishlist: false }).populate('productId').sort({ daysRemaining: 1 }),
+      User.findById(userId).select('-password').lean()
+    ]);
 
-  if (!items.length && !req.user?.id) {
-    items = await RestockItem.find({}).populate('productId').limit(5);
+    const dashboard = generateUserRestockDashboard(items, user || {}, new Date());
+
+    res.json({
+      userId,
+      ...dashboard
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load restock dashboard', details: err.message });
   }
-
-  // Refresh predictions for items (re-calculate with current date)
-  const refreshed = items.map(item => {
-    if (!item.productId) return item;
-    const obj = item.toObject();
-
-    // Recalculate remaining days based on current time
-    const elapsed = (Date.now() - new Date(item.purchaseDate).getTime()) / (1000 * 60 * 60 * 24);
-    const newRemaining = Math.max(0, Math.round(item.daysRemaining - (elapsed - (item.totalLifespan - item.daysRemaining) || 0)));
-
-    // Determine urgency from fresh calculation
-    let urgency = 'safe';
-    if (item.daysRemaining <= 2) urgency = 'danger';
-    else if (item.daysRemaining <= 5) urgency = 'warning';
-
-    return { ...obj, urgency };
-  });
-
-  res.json(refreshed);
 });
 
 // ─── Calendar View ───────────────────────────────────────────────────────────

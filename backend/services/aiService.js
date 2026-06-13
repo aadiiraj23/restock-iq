@@ -13,7 +13,29 @@
 
 const { deepParseIntent, CATEGORY_TAXONOMY, OCCASION_RULES } = require('./nlpEngine');
 const { scoreAndRankProducts, scoreSubstitutes } = require('./scoringEngine');
-const { buildPurchaseProfile, getWeightAdjustments, getCooccurringProducts, refreshLearningCache } = require('./feedbackLearner');
+
+let feedbackLearner;
+try {
+  feedbackLearner = require('./feedbackLearner');
+} catch {
+  feedbackLearner = {
+    buildPurchaseProfile: async () => ({
+      categories: [],
+      brands: [],
+      productIds: [],
+      avgPrice: 10,
+      maxPrice: 50,
+      orderCount: 0,
+      avgDaysBetweenOrders: 7,
+      isFrequentBuyer: false
+    }),
+    getWeightAdjustments: async () => ({}),
+    getCooccurringProducts: async () => [],
+    refreshLearningCache: async () => {}
+  };
+}
+
+const { buildPurchaseProfile, getWeightAdjustments, getCooccurringProducts, refreshLearningCache } = feedbackLearner;
 
 let mlModels;
 try {
@@ -238,4 +260,98 @@ function generateSuggestions(partial, products) {
   return suggestions.slice(0, 8);
 }
 
-module.exports = { processPromptWithAI, generateSuggestions, CATEGORY_KEYWORDS, OCCASION_PATTERNS };
+async function processAIShoppingRequest({ user_prompt, userId = null, products = [], userProfile = {}, filters = {} }) {
+  const prompt = String(user_prompt || '').trim();
+  if (!prompt) {
+    throw new Error('user_prompt is required');
+  }
+
+  const resolvedProfile = userProfile || {};
+  const userPrefs = resolvedProfile.preferences || resolvedProfile || {};
+  const pipelineResult = await processPromptWithAI(prompt, products, userPrefs, userId);
+  const budgetCeiling = pipelineResult.parsedSlots?.budget?.max
+    ?? userPrefs?.budget
+    ?? resolvedProfile?.monthlyBudget
+    ?? null;
+
+  const ranked = pipelineResult.products
+    .slice()
+    .sort((a, b) => b._aiScore - a._aiScore)
+    .map(product => {
+      const substituteCandidates = budgetCeiling
+        ? scoreSubstitutes(product, products, userPrefs).filter(candidate => candidate.price <= budgetCeiling)
+        : [];
+      const budgetSubstitute = substituteCandidates[0] || null;
+      const effectiveProduct = budgetSubstitute || product;
+
+      return {
+        _id: effectiveProduct._id,
+        name: effectiveProduct.name,
+        brand: effectiveProduct.brand,
+        category: effectiveProduct.category,
+        price: effectiveProduct.price,
+        originalPrice: effectiveProduct.originalPrice,
+        image: effectiveProduct.image,
+        rating: effectiveProduct.rating,
+        reviewCount: effectiveProduct.reviewCount,
+        deliveryETA: effectiveProduct.deliveryETA,
+        stock: effectiveProduct.stock,
+        isPrime: effectiveProduct.isPrime,
+        size: effectiveProduct.size,
+        description: effectiveProduct.description,
+        tags: effectiveProduct.tags,
+        aiScore: product._aiScore,
+        rankReason: product.rankReason,
+        signals: product._signals,
+        budgetSubstituted: Boolean(budgetSubstitute),
+        budgetSubstitute: budgetSubstitute ? {
+          _id: budgetSubstitute._id,
+          name: budgetSubstitute.name,
+          brand: budgetSubstitute.brand,
+          category: budgetSubstitute.category,
+          price: budgetSubstitute.price,
+          originalPrice: budgetSubstitute.originalPrice,
+          image: budgetSubstitute.image,
+          rating: budgetSubstitute.rating,
+          reviewCount: budgetSubstitute.reviewCount,
+          deliveryETA: budgetSubstitute.deliveryETA,
+          stock: budgetSubstitute.stock,
+          isPrime: budgetSubstitute.isPrime,
+          size: budgetSubstitute.size,
+          description: budgetSubstitute.description,
+          tags: budgetSubstitute.tags,
+          substitutionScore: budgetSubstitute.substitutionScore,
+          priceDifference: budgetSubstitute.priceDifference,
+          reason: budgetSubstitute.reason
+        } : null
+      };
+    });
+
+  return {
+    products: ranked,
+    intentSummary: {
+      prompt,
+      parsedIntent: pipelineResult.analysis.intent,
+      categories: pipelineResult.analysis.categories,
+      urgency: pipelineResult.analysis.urgency,
+      quantity: pipelineResult.analysis.quantity,
+      confidence: pipelineResult.analysis.confidence,
+      occasion: pipelineResult.analysis.occasion,
+      budget: pipelineResult.parsedSlots?.budget || null,
+      matchesFound: ranked.length,
+      totalProductsSearched: products.length,
+      filters
+    },
+    parsedSlots: pipelineResult.parsedSlots,
+    analysis: pipelineResult.analysis,
+    alsoNeeded: pipelineResult.analysis.alsoNeeded || []
+  };
+}
+
+module.exports = {
+  processPromptWithAI,
+  processAIShoppingRequest,
+  generateSuggestions,
+  CATEGORY_KEYWORDS,
+  OCCASION_PATTERNS
+};

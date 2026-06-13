@@ -140,10 +140,7 @@ async function trainModels(Product, Order, FeedbackEvent, IntentRequest) {
     // 1. Train TF-IDF on product corpus
     const products = await Product.find({}).lean();
     const tfidf = new TfIdfVectorizer();
-    const productTexts = products.map(p =>
-      `${p.name} ${p.brand || ''} ${(p.tags || []).join(' ')} ${p.description || ''} ${p.category}`
-    );
-    tfidf.fit(productTexts);
+    tfidf.fit(products);
 
     // 2. Build product vectors
     const productVectors = new Map();
@@ -231,7 +228,13 @@ function getTfIdfScore(query, product) {
  */
 function classifyIntent(text) {
   if (!models.intentClassifier) return [{ label: 'general', probability: 1.0 }];
-  return models.intentClassifier.predict(text);
+  if (typeof models.intentClassifier.predictProba === 'function') {
+    return models.intentClassifier.predictProba(text);
+  }
+
+  const prediction = models.intentClassifier.predict(text);
+  if (Array.isArray(prediction)) return prediction;
+  return [{ label: prediction || 'general', probability: 1.0 }];
 }
 
 /**
