@@ -1,0 +1,136 @@
+.shop-page {
+  padding-top: 24px;
+}
+
+.shop-header {
+  margin-bottom: 24px;
+}
+
+.shop-header h1 {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.shop-header p {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.shop-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 24px;
+}
+
+/* Sidebar */
+.shop-sidebar {
+  position: sticky;
+  top: 80px;
+  align-self: start;
+}
+
+.filter-section {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.filter-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.category-list {
+  list-style: none;
+}
+
+.category-list li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+  transition: all 0.2s;
+}
+
+.category-list li button:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.category-list li button.active {
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+.filter-section select {
+  width: 100%;
+}
+
+/* Main */
+.shop-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.view-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.view-toggle button {
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  color: var(--text-light);
+  transition: all 0.2s;
+}
+
+.view-toggle button.active {
+  background: var(--dark);
+  color: #fff;
+}
+
+.shop-grid.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.shop-grid.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+  .shop-layout {
+    grid-template-columns: 1fr;
+  }
+  .shop-sidebar {
+    position: static;
+  }
+}
