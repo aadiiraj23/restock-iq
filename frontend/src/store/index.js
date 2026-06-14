@@ -114,7 +114,8 @@ export const useAuthStore = create(
         }
       },
       login: (userData, token) => get().actions.login(userData, token),
-      logout: () => get().actions.logout()
+      logout: () => get().actions.logout(),
+      setAuth: (userData, token) => get().actions.login(userData, token)
     }),
     {
       name: 'amazon-auth',

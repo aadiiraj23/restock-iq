@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Mic, MicOff, Loader2, ChevronDown, ChevronUp, UploadCloud, Sparkles, Brain, BadgeInfo, ShoppingBag, Flame, ShieldCheck, CircleDollarSign } from 'lucide-react';
+import { Search, Mic, MicOff, Loader2, ChevronDown, ChevronUp, UploadCloud, Sparkles, Brain, BadgeInfo, ShoppingBag, Flame, ShieldCheck, CircleDollarSign, Filter, SlidersHorizontal, X, AlertCircle } from 'lucide-react';
 import { ai, intent, catalog } from '../api';
-import { useAuthStore, useIntentStore } from '../store';
+import { useAuthStore, useIntentStore, useCartStore } from '../store';
 
 const QUICK_MISSIONS = [
   { label: 'Movie Night 🍿', prompt: 'Movie night snacks for 4 people under $20', category: 'snacks', icon: '🍿' },
@@ -9,7 +9,18 @@ const QUICK_MISSIONS = [
   { label: 'Baby Care 🍼', prompt: 'Baby care essentials with diapers wipes and formula', category: 'baby', icon: '🍼' },
   { label: 'Deep Clean 🧼', prompt: 'Deep cleaning supplies for kitchen and bathroom', category: 'cleaning', icon: '🧼' },
   { label: 'Pantry Restock ☕', prompt: 'Pantry restock with coffee tea pasta and snacks', category: 'pantry', icon: '☕' },
-  { label: 'Office Sprint 📎', prompt: 'Office supplies notebooks printer paper and pens', category: 'office', icon: '📎' }
+  { label: 'Office Sprint 📎', prompt: 'Office supplies notebooks printer paper and pens', category: 'office', icon: '📎' },
+  { label: 'Gym Fuel 💪', prompt: 'Protein bars energy drinks and post-workout snacks', category: 'health', icon: '💪' },
+  { label: 'Pet Supplies 🐕', prompt: 'Dog food treats and grooming essentials', category: 'pets', icon: '🐕' }
+];
+
+const CATEGORIES = ['all', 'snacks', 'medicine', 'cleaning', 'personal_care', 'groceries', 'household', 'baby', 'health'];
+const SORT_OPTIONS = [
+  { value: 'relevance', label: 'AI Relevance' },
+  { value: 'price_low', label: 'Price: Low to High' },
+  { value: 'price_high', label: 'Price: High to Low' },
+  { value: 'rating', label: 'Highest Rated' },
+  { value: 'delivery', label: 'Fastest Delivery' }
 ];
 
 function clampScore(value) {
@@ -44,7 +55,7 @@ function ScoreBar({ label, value, tone = 'orange' }) {
   );
 }
 
-function ResultCard({ product, isOpen, onToggle }) {
+function ResultCard({ product, isOpen, onToggle, onAddToCart }) {
   const signals = product.signals || {};
   const textSignal = signals.relevance ?? signals.textSimilarity ?? product.aiScore ?? 0;
   const ratingSignal = signals.quality ?? (product.rating ? product.rating * 20 : 0);
@@ -56,7 +67,12 @@ function ResultCard({ product, isOpen, onToggle }) {
       <div className="p-4 flex gap-4">
         <div className="h-24 w-24 shrink-0 rounded-2xl bg-slate-100 overflow-hidden border border-slate-200">
           {product.image ? (
-            <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+            <img
+              src={product.image}
+              alt={product.name}
+              className="h-full w-full object-cover"
+              onError={(e) => { e.target.src = '/placeholder.png'; }}
+            />
           ) : (
             <div className="h-full w-full flex items-center justify-center text-slate-400 text-xs">No image</div>
           )}
@@ -99,6 +115,13 @@ function ResultCard({ product, isOpen, onToggle }) {
           </div>
 
           <p className="mt-2 text-sm text-slate-600 line-clamp-2">{product.rankReason || product.description || 'AI-ranked recommendation.'}</p>
+
+          <button
+            onClick={() => onAddToCart && onAddToCart(product)}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-amazon-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-amazon-orange-dark transition"
+          >
+            <ShoppingBag size={13} /> Add to Cart
+          </button>
         </div>
       </div>
 
@@ -130,33 +153,41 @@ export default function AIDashboard() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
+  const [interimText, setInterimText] = useState('');
   const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
   const [dropActive, setDropActive] = useState(false);
   const [openProductId, setOpenProductId] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState({
+    category: 'all',
+    sortBy: 'relevance',
+    priceMin: '',
+    priceMax: '',
+    primeOnly: false
+  });
 
   const { user, householdProfile } = useAuthStore();
-  const { recentMissions, currentSlots, aiResults, actions } = useIntentStore();
+  const { recentMissions, currentSlots, aiResults, trackMission, setCurrentSlots, setAiResults } = useIntentStore();
   const inputRef = useRef(null);
   const recognitionRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
-
     intent.getTemplates().then(({ data }) => {
       if (!alive) return;
       setTemplates(Array.isArray(data) ? data : data?.templates || []);
     }).catch(() => {});
-
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
-    const hasSpeech = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
-    setVoiceSupported(Boolean(hasSpeech));
+    const SpeechAPI = typeof window !== 'undefined'
+      ? (window.SpeechRecognition || window.webkitSpeechRecognition)
+      : null;
+    setVoiceSupported(Boolean(SpeechAPI));
   }, []);
 
   useEffect(() => {
@@ -164,28 +195,23 @@ export default function AIDashboard() {
       setSuggestions([]);
       return;
     }
-
     const timer = setTimeout(() => {
       ai.suggest({ partial: query })
         .then(({ data }) => setSuggestions(data.suggestions || []))
         .catch(() => setSuggestions([]));
-    }, 250);
-
+    }, 300);
     return () => clearTimeout(timer);
   }, [query]);
 
+  // Cleanup recognition on unmount
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.onresult = null;
-        recognitionRef.current.onend = null;
-        recognitionRef.current.onerror = null;
-        if (listening) {
-          try { recognitionRef.current.stop(); } catch (_) {}
-        }
+        try { recognitionRef.current.abort(); } catch (_) {}
+        recognitionRef.current = null;
       }
     };
-  }, [listening]);
+  }, []);
 
   const missionTemplates = useMemo(() => {
     const serverTemplates = Array.isArray(templates) ? templates : [];
@@ -194,18 +220,75 @@ export default function AIDashboard() {
 
   const currentUserId = user?.id || user?._id || householdProfile?.id || null;
 
+  // --- Filter and sort results ---
+  const filteredResults = useMemo(() => {
+    let results = [...aiResults];
+
+    // Category filter
+    if (filters.category !== 'all') {
+      results = results.filter(p => p.category === filters.category);
+    }
+
+    // Price range filter
+    const minPrice = Number(filters.priceMin) || 0;
+    const maxPrice = Number(filters.priceMax) || Infinity;
+    if (minPrice > 0 || maxPrice < Infinity) {
+      results = results.filter(p => {
+        const price = Number(p.price || 0);
+        return price >= minPrice && price <= maxPrice;
+      });
+    }
+
+    // Prime only
+    if (filters.primeOnly) {
+      results = results.filter(p => p.isPrime);
+    }
+
+    // Sort
+    switch (filters.sortBy) {
+      case 'price_low':
+        results.sort((a, b) => (a.price || 0) - (b.price || 0));
+        break;
+      case 'price_high':
+        results.sort((a, b) => (b.price || 0) - (a.price || 0));
+        break;
+      case 'rating':
+        results.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        break;
+      case 'delivery':
+        results.sort((a, b) => (parseInt(a.deliveryETA) || 99) - (parseInt(b.deliveryETA) || 99));
+        break;
+      default:
+        // relevance — keep AI order
+        break;
+    }
+
+    return results;
+  }, [aiResults, filters]);
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filters.category !== 'all') count++;
+    if (filters.sortBy !== 'relevance') count++;
+    if (filters.priceMin) count++;
+    if (filters.priceMax) count++;
+    if (filters.primeOnly) count++;
+    return count;
+  }, [filters]);
+
   const performSearch = async (text) => {
     const user_prompt = String(text || query).trim();
     if (!user_prompt || loading) return;
 
     setLoading(true);
     setSuggestions([]);
+    setVoiceError('');
 
     try {
       const { data } = await ai.shop({ user_prompt, userId: currentUserId });
       const nextResults = Array.isArray(data.products) ? data.products : [];
 
-      actions.trackMission({
+      trackMission({
         intentId: data.intentId || `${Date.now()}`,
         intent: data.intentSummary?.parsedIntent || user_prompt,
         prompt: user_prompt,
@@ -214,8 +297,8 @@ export default function AIDashboard() {
         urgency: data.intentSummary?.urgency || 'medium'
       });
 
-      actions.setCurrentSlots(data.intentSummary || data.parsedSlots || {});
-      actions.setAiResults(nextResults);
+      setCurrentSlots(data.intentSummary || data.parsedSlots || {});
+      setAiResults(nextResults);
       setOpenProductId(nextResults[0]?._id || null);
     } catch (error) {
       console.error('AI search failed', error);
@@ -231,47 +314,144 @@ export default function AIDashboard() {
     performSearch(prompt);
   };
 
+  // --- Microphone: Web Speech API with network fallback ---
   const handleMicToggle = () => {
-    if (!voiceSupported) return;
-
-    if (listening && recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (_) {}
-      setListening(false);
+    if (!voiceSupported) {
+      setVoiceError('Voice input is not supported in this browser. Try Chrome or Edge.');
       return;
     }
 
+    // If already listening, stop
+    if (listening && recognitionRef.current) {
+      recognitionRef.current._manualStop = true;
+      try { recognitionRef.current.stop(); } catch (_) {}
+      setListening(false);
+      setInterimText('');
+      if (query.trim()) {
+        performSearch(query);
+      }
+      return;
+    }
+
+    setVoiceError('');
+    setInterimText('');
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setListening(true);
+    // Use non-continuous mode — more reliable, avoids network errors on many setups
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition._manualStop = false;
+    recognition._retryCount = 0;
+
+    recognition.onstart = () => {
+      setListening(true);
+      setVoiceError('');
+    };
+
     recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript || '';
-      if (transcript) {
-        setQuery(transcript);
-        performSearch(transcript);
+      let finalTranscript = '';
+      let interimTranscript = '';
+
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript;
+        } else {
+          interimTranscript += result[0].transcript;
+        }
+      }
+
+      if (finalTranscript) {
+        const trimmed = finalTranscript.trim();
+        setQuery(trimmed);
+        setInterimText('');
+        // Auto-search after getting final result
+        setListening(false);
+        performSearch(trimmed);
+      } else if (interimTranscript) {
+        setInterimText(interimTranscript);
+        // Show interim in the input field for real-time feedback
+        setQuery(interimTranscript);
       }
     };
-    recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
+
+    recognition.onerror = (event) => {
+      setInterimText('');
+
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        setListening(false);
+        setVoiceError('Microphone permission denied. Go to browser Settings > Privacy > Microphone and allow this site.');
+      } else if (event.error === 'no-speech') {
+        // No speech detected — auto-retry silently
+        if (!recognition._manualStop && recognition._retryCount < 3) {
+          recognition._retryCount++;
+          try { recognition.start(); } catch (_) {}
+          return;
+        }
+        setListening(false);
+        setVoiceError('No speech detected. Click the mic and speak clearly.');
+      } else if (event.error === 'network') {
+        // Network error — the browser can't reach Google's speech servers.
+        // Retry once, then show helpful message
+        if (!recognition._manualStop && recognition._retryCount < 1) {
+          recognition._retryCount++;
+          setTimeout(() => {
+            try { recognition.start(); } catch (_) {
+              setListening(false);
+              setVoiceError('Speech recognition unavailable. Check your internet connection and try again.');
+            }
+          }, 500);
+          return;
+        }
+        setListening(false);
+        setVoiceError('Speech recognition needs internet access. Check your connection, disable VPN/proxy, or try typing instead.');
+      } else if (event.error === 'aborted') {
+        setListening(false);
+      } else {
+        setListening(false);
+        setVoiceError(`Voice error: ${event.error}. Try again or type your request.`);
+      }
+    };
+
+    recognition.onend = () => {
+      // If not manually stopped and we're still in listening mode, restart
+      // This handles the case where continuous=false ends after silence
+      if (!recognition._manualStop && listening) {
+        setListening(false);
+      }
+    };
 
     recognitionRef.current = recognition;
-    recognition.start();
+
+    try {
+      recognition.start();
+    } catch (err) {
+      setVoiceError('Could not start voice input. Make sure no other app is using the microphone.');
+      setListening(false);
+    }
   };
 
   const handleDrop = (event) => {
     event.preventDefault();
     setDropActive(false);
-
     const file = event.dataTransfer?.files?.[0];
     if (!file) return;
-
     const fileName = file.name.replace(/\.[^.]+$/, '').replace(/[._-]/g, ' ');
     const prompt = `I uploaded a photo of ${fileName}`;
     setQuery(prompt);
     performSearch(prompt);
+  };
+
+  const handleAddToCart = (product) => {
+    useCartStore.getState().addItem(product);
+  };
+
+  const resetFilters = () => {
+    setFilters({ category: 'all', sortBy: 'relevance', priceMin: '', priceMax: '', primeOnly: false });
   };
 
   const activeMission = recentMissions[0] || null;
@@ -279,6 +459,7 @@ export default function AIDashboard() {
   return (
     <div className="min-h-[calc(100vh-120px)] bg-[radial-gradient(circle_at_top,_rgba(255,153,0,0.10),_transparent_32%),linear-gradient(180deg,#fefefe_0%,#f7f7f7_100%)] text-slate-900">
       <div className="mx-auto max-w-7xl px-4 py-8 md:px-6 lg:px-8">
+        {/* Header */}
         <div className="mb-8 text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-white/80 px-4 py-1.5 text-sm font-semibold text-amazon-orange shadow-sm backdrop-blur">
             <Sparkles size={15} /> Conversational Shopping Dashboard
@@ -290,7 +471,9 @@ export default function AIDashboard() {
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
+          {/* Left Column */}
           <section className="space-y-6">
+            {/* Search Input Card */}
             <div className="rounded-3xl border border-slate-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
               <div className="border-b border-slate-100 px-5 py-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -299,6 +482,7 @@ export default function AIDashboard() {
               </div>
 
               <div className="space-y-4 p-5">
+                {/* Input + Mic + Search */}
                 <div className="relative">
                   <input
                     ref={inputRef}
@@ -306,20 +490,26 @@ export default function AIDashboard() {
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && performSearch(query)}
                     placeholder="Movie night snacks for 4 people under $20"
-                    className="w-full rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-4 pr-36 text-base text-slate-900 outline-none transition focus:border-amazon-orange focus:bg-white"
+                    className={`w-full rounded-2xl border-2 bg-slate-50 px-5 py-4 pr-40 text-base text-slate-900 outline-none transition focus:bg-white ${listening ? 'border-red-400 ring-2 ring-red-100' : 'border-slate-200 focus:border-amazon-orange'}`}
                   />
                   <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-2">
                     <button
                       onClick={handleMicToggle}
                       disabled={!voiceSupported}
-                      className={`inline-flex items-center justify-center rounded-xl px-3 py-2 text-white shadow-sm transition ${listening ? 'bg-red-500 hover:bg-red-600' : 'bg-slate-700 hover:bg-slate-800'} disabled:cursor-not-allowed disabled:opacity-40`}
-                      title={voiceSupported ? 'Use voice dictation' : 'Voice not supported in this browser'}
+                      className={`relative inline-flex items-center justify-center rounded-xl px-3 py-2 text-white shadow-sm transition ${listening ? 'bg-red-500 hover:bg-red-600' : 'bg-slate-700 hover:bg-slate-800'} disabled:cursor-not-allowed disabled:opacity-40`}
+                      title={voiceSupported ? (listening ? 'Click to stop recording' : 'Click to start voice input') : 'Voice not supported in this browser'}
                     >
                       {listening ? <MicOff size={18} /> : <Mic size={18} />}
+                      {listening && (
+                        <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                          <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
+                        </span>
+                      )}
                     </button>
                     <button
                       onClick={() => performSearch(query)}
-                      disabled={loading}
+                      disabled={loading || !query.trim()}
                       className="inline-flex items-center gap-2 rounded-xl bg-amazon-orange px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amazon-orange-dark disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {loading ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
@@ -328,6 +518,43 @@ export default function AIDashboard() {
                   </div>
                 </div>
 
+                {/* Voice interim text indicator */}
+                {listening && (
+                  <div className="flex items-center gap-3 rounded-xl bg-red-50 border border-red-200 px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse delay-75" />
+                      <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse delay-150" />
+                    </div>
+                    <span className="text-sm text-red-700 font-medium">
+                      {interimText ? `"${interimText}"` : 'Listening... speak now'}
+                    </span>
+                    <button
+                      onClick={handleMicToggle}
+                      className="ml-auto text-xs text-red-600 hover:text-red-800 font-medium"
+                    >
+                      Stop & Search
+                    </button>
+                  </div>
+                )}
+
+                {/* Voice error message */}
+                {voiceError && (
+                  <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+                    <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <span className="text-sm text-amber-700">{voiceError}</span>
+                      {voiceError.includes('internet') || voiceError.includes('network') || voiceError.includes('unavailable') ? (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Tip: Chrome sends voice to Google servers for processing. Make sure you have a working internet connection and no VPN/firewall blocking it. You can also just type your request in the box above.
+                        </p>
+                      ) : null}
+                    </div>
+                    <button onClick={() => setVoiceError('')} className="shrink-0"><X size={14} className="text-amber-600" /></button>
+                  </div>
+                )}
+
+                {/* Suggestions dropdown */}
                 {suggestions.length > 0 && (
                   <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                     {suggestions.map((suggestion, index) => (
@@ -336,9 +563,7 @@ export default function AIDashboard() {
                         onClick={() => {
                           const structured = suggestion.type === 'category'
                             ? `I need ${suggestion.text} products`
-                            : suggestion.type === 'mission'
-                              ? suggestion.text
-                              : suggestion.text;
+                            : suggestion.text;
                           setQuery(structured);
                           performSearch(structured);
                         }}
@@ -354,6 +579,7 @@ export default function AIDashboard() {
                   </div>
                 )}
 
+                {/* Drop zone + Intent Parser */}
                 <div className="grid gap-4 md:grid-cols-[1fr_1fr]">
                   <div
                     onDragOver={(e) => { e.preventDefault(); setDropActive(true); }}
@@ -363,7 +589,7 @@ export default function AIDashboard() {
                   >
                     <UploadCloud className="mb-2 text-amazon-orange" size={28} />
                     <p className="font-semibold text-slate-900">Drop a product photo here</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">Mimics the upload zone. Drop a file to generate a shopping prompt.</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">Upload an image to generate a shopping prompt automatically.</p>
                   </div>
 
                   <div className="rounded-2xl bg-[linear-gradient(180deg,#fff7e6,#ffffff)] p-5 ring-1 ring-amber-100">
@@ -373,7 +599,7 @@ export default function AIDashboard() {
                     <div className="mt-4 grid gap-3 text-sm">
                       <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 shadow-sm ring-1 ring-slate-100">
                         <span className="text-slate-500">Mission</span>
-                        <span className="font-semibold text-slate-900">{currentSlots?.parsedIntent || activeMission?.intent || 'Waiting for input'}</span>
+                        <span className="font-semibold text-slate-900 truncate ml-2 max-w-[180px]">{currentSlots?.parsedIntent || activeMission?.intent || 'Waiting for input'}</span>
                       </div>
                       <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2 shadow-sm ring-1 ring-slate-100">
                         <span className="text-slate-500">Budget</span>
@@ -387,27 +613,14 @@ export default function AIDashboard() {
                       </div>
                       <div className="rounded-xl bg-white px-3 py-2 shadow-sm ring-1 ring-slate-100">
                         <div className="flex items-center justify-between">
-                          <span className="text-slate-500">Target brands</span>
-                          <span className="text-xs text-slate-400">{(currentSlots?.brandHints || []).length || 0}</span>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {(currentSlots?.brandHints?.length ? currentSlots.brandHints : ['No filters']).map((brand) => (
-                            <span key={brand} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                              {brand}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="rounded-xl bg-white px-3 py-2 shadow-sm ring-1 ring-slate-100">
-                        <div className="flex items-center justify-between">
                           <span className="text-slate-500">Slots</span>
                           <span className="text-xs text-slate-400">Live</span>
                         </div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                          <span>Quantity: {currentSlots?.quantity?.value || currentSlots?.quantity || 1}</span>
+                          <span>Qty: {currentSlots?.quantity?.value || currentSlots?.quantity || 1}</span>
                           <span>Occasion: {currentSlots?.occasion || 'general'}</span>
                           <span>Confidence: {Math.round((currentSlots?.confidence || 0) * 100)}%</span>
-                          <span>Categories: {(currentSlots?.categories || []).join(', ') || 'none'}</span>
+                          <span>Categories: {(currentSlots?.categories || []).join(', ') || 'any'}</span>
                         </div>
                       </div>
                     </div>
@@ -416,6 +629,7 @@ export default function AIDashboard() {
               </div>
             </div>
 
+            {/* Quick Mission Chips */}
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -425,7 +639,6 @@ export default function AIDashboard() {
                   <p className="mt-1 text-sm text-slate-500">One tap launches a structured shopping mission and AI search.</p>
                 </div>
               </div>
-
               <div className="mt-4 flex flex-wrap gap-2">
                 {missionTemplates.map((mission) => (
                   <button
@@ -440,10 +653,110 @@ export default function AIDashboard() {
             </div>
           </section>
 
+          {/* Right Column */}
           <aside className="space-y-6">
+            {/* Filter Panel */}
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <ShoppingBag size={16} className="text-amazon-orange" /> AI-Ranked Results Grid
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex w-full items-center justify-between"
+              >
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <SlidersHorizontal size={16} className="text-amazon-orange" /> Filters & Sort
+                  {activeFilterCount > 0 && (
+                    <span className="rounded-full bg-amazon-orange text-white text-[10px] font-bold px-1.5 py-0.5">{activeFilterCount}</span>
+                  )}
+                </div>
+                {showFilters ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+              </button>
+
+              {showFilters && (
+                <div className="mt-4 space-y-4">
+                  {/* Category */}
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2 block">Category</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CATEGORIES.map(cat => (
+                        <button
+                          key={cat}
+                          onClick={() => setFilters(f => ({ ...f, category: cat }))}
+                          className={`rounded-full px-3 py-1.5 text-xs font-medium capitalize transition ${filters.category === cat ? 'bg-amazon-orange text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                        >
+                          {cat === 'all' ? 'All' : cat.replace('_', ' ')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Sort */}
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2 block">Sort By</label>
+                    <select
+                      value={filters.sortBy}
+                      onChange={(e) => setFilters(f => ({ ...f, sortBy: e.target.value }))}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 outline-none focus:border-amazon-orange"
+                    >
+                      {SORT_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Price Range */}
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2 block">Price Range</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        placeholder="Min"
+                        value={filters.priceMin}
+                        onChange={(e) => setFilters(f => ({ ...f, priceMin: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-amazon-orange"
+                      />
+                      <span className="text-slate-400">—</span>
+                      <input
+                        type="number"
+                        placeholder="Max"
+                        value={filters.priceMax}
+                        onChange={(e) => setFilters(f => ({ ...f, priceMax: e.target.value }))}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-amazon-orange"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Prime Only */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={filters.primeOnly}
+                      onChange={(e) => setFilters(f => ({ ...f, primeOnly: e.target.checked }))}
+                      className="h-4 w-4 rounded border-slate-300 text-amazon-orange focus:ring-amazon-orange"
+                    />
+                    <span className="text-sm text-slate-700 font-medium">Prime eligible only</span>
+                  </label>
+
+                  {/* Reset */}
+                  {activeFilterCount > 0 && (
+                    <button
+                      onClick={resetFilters}
+                      className="text-xs text-amazon-orange hover:underline font-medium"
+                    >
+                      Reset all filters
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Results Grid */}
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <ShoppingBag size={16} className="text-amazon-orange" /> AI-Ranked Results
+                </div>
+                {filteredResults.length > 0 && (
+                  <span className="text-xs text-slate-500">{filteredResults.length} items</span>
+                )}
               </div>
 
               {loading ? (
@@ -451,16 +764,25 @@ export default function AIDashboard() {
                   <Loader2 className="animate-spin text-amazon-orange" size={34} />
                   <div className="text-sm font-medium">Ranking products and generating substitutions…</div>
                 </div>
-              ) : aiResults.length > 0 ? (
+              ) : filteredResults.length > 0 ? (
                 <div className="mt-4 grid gap-4">
-                  {aiResults.map((product) => (
+                  {filteredResults.map((product) => (
                     <ResultCard
                       key={product._id}
                       product={product}
                       isOpen={openProductId === product._id}
                       onToggle={() => setOpenProductId(openProductId === product._id ? null : product._id)}
+                      onAddToCart={handleAddToCart}
                     />
                   ))}
+                </div>
+              ) : aiResults.length > 0 ? (
+                <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  <Filter size={20} className="mx-auto mb-2 text-slate-400" />
+                  No results match your filters.
+                  <button onClick={resetFilters} className="block mx-auto mt-2 text-amazon-orange hover:underline text-xs font-medium">
+                    Reset filters
+                  </button>
                 </div>
               ) : (
                 <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
@@ -469,6 +791,7 @@ export default function AIDashboard() {
               )}
             </div>
 
+            {/* Shopping Context */}
             <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,#fff,_#fff8ef)] p-5 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                 <ShieldCheck size={16} className="text-emerald-600" /> Shopping Context
