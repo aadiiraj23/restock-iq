@@ -19,6 +19,7 @@ import RestockDashboard from './pages/RestockDashboard';
 import RestockCalendar from './pages/RestockCalendar';
 import RestockAnalytics from './pages/RestockAnalytics';
 import RestockNotifications from './pages/RestockNotifications';
+import SubscriptionsPage from './pages/SubscriptionsPage';
 
 export default function App() {
   const [cartOpen, setCartOpen] = useState(false);
@@ -57,6 +58,7 @@ export default function App() {
           <Route path="/restock/calendar" element={<RestockCalendar />} />
           <Route path="/restock/analytics" element={<RestockAnalytics />} />
           <Route path="/restock/notifications" element={<RestockNotifications />} />
+          <Route path="/subscriptions" element={<SubscriptionsPage />} />
         </Routes>
       </main>
       <Footer />

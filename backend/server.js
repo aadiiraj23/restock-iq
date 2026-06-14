@@ -15,6 +15,7 @@ const restockRoutes = require('./routes/restock');
 const feedbackRoutes = require('./routes/feedback');
 const aiRoutes = require('./routes/ai');
 const consumptionRoutes = require('./routes/consumption');
+const subscriptionRoutes = require('./routes/subscriptions');
 
 // ML Model Manager
 const { trainModels, getModelStatus, needsRetraining } = require('./services/mlModels');
@@ -22,6 +23,13 @@ const { trainModels, getModelStatus, needsRetraining } = require('./services/mlM
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// ─── Serve Frontend in Production ────────────────────────────────────────────
+const path = require('path');
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+if (require('fs').existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+}
 
 // ─── Health & ML Status ──────────────────────────────────────────────────────
 
@@ -41,6 +49,7 @@ app.use('/api/feedback', feedbackRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/items', consumptionRoutes);
 app.use('/api/orders', checkoutRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // ─── ML Model Training Endpoint (manual retrain) ─────────────────────────────
 
@@ -77,7 +86,16 @@ async function startServer() {
     }
   }, 15 * 60 * 1000);
 
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  // SPA catch-all: serve index.html for any non-API route (must be after API routes)
+  const fs = require('fs');
+  const indexPath = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
+  if (fs.existsSync(indexPath)) {
+    app.get('*', (req, res) => {
+      res.sendFile(indexPath);
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
 }
 
 startServer();

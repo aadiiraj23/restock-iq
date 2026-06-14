@@ -96,6 +96,17 @@ export const auth = {
   updateHousehold: (data) => api.put('/auth/household', data)
 };
 
+// ─── Subscriptions ───────────────────────────────────────────────────────────
+
+export const subscriptions = {
+  getAll: () => api.get('/subscriptions'),
+  getCalendar: () => api.get('/subscriptions/calendar'),
+  getExpenses: () => api.get('/subscriptions/expenses'),
+  create: (data) => api.post('/subscriptions', data),
+  update: (id, data) => api.put(`/subscriptions/${id}`, data),
+  cancel: (id) => api.delete(`/subscriptions/${id}`)
+};
+
 // ─── Feedback (learning) ─────────────────────────────────────────────────────
 
 export const feedback = {

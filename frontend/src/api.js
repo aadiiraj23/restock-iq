@@ -1,4 +1,4 @@
-import api, { catalog, intent, ai, cart, checkout, restock, auth, feedback } from './api/index.js';
+import api, { catalog, intent, ai, cart, checkout, restock, auth, feedback, subscriptions } from './api/index.js';
 
 export default api;
 
@@ -48,4 +48,4 @@ export const predictDepletion = (data) => restock.predict(data);
 
 export const submitFeedback = (data) => feedback.send(data);
 
-export { catalog, intent, ai, cart, checkout, restock, auth, feedback };
+export { catalog, intent, ai, cart, checkout, restock, auth, feedback, subscriptions };

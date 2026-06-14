@@ -78,6 +78,7 @@ export default function TopNav({ onCartClick }) {
           <Link to="/category/personal_care" className="shrink-0 hover:underline">Personal Care</Link>
           <Link to="/category/groceries" className="shrink-0 hover:underline">Groceries</Link>
           <Link to="/restock" className="shrink-0 hover:underline text-amazon-yellow font-medium">ReStock AI</Link>
+          <Link to="/subscriptions" className="shrink-0 hover:underline text-emerald-300 font-medium">Subscriptions</Link>
           <span className="shrink-0 text-amazon-yellow">⚡ Express Delivery</span>
         </div>
       </div>

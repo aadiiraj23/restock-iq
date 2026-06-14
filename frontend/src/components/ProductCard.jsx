@@ -1,12 +1,30 @@
 import { useState } from 'react';
-import { Star, Truck, Zap, Tag } from 'lucide-react';
+import { Star, Truck, Zap, Tag, RefreshCw } from 'lucide-react';
 import { useCartStore } from '../store';
+import { subscriptions as subApi } from '../api';
 import BuyNowOverlay from './BuyNowOverlay';
+import toast from 'react-hot-toast';
 
 export default function ProductCard({ product, onCompare, showRank, compact, recommendationReason }) {
   const addItem = useCartStore(s => s.addItem);
   const [showBuyNow, setShowBuyNow] = useState(false);
+  const [showSubOptions, setShowSubOptions] = useState(false);
+  const [subLoading, setSubLoading] = useState(false);
   const discount = product.originalPrice ? Math.round((1 - product.price / product.originalPrice) * 100) : 0;
+
+  async function handleSubscribe(frequency) {
+    setSubLoading(true);
+    try {
+      await subApi.create({ productId: product._id, frequency, quantity: 1 });
+      toast.success(`Subscribed ${frequency}!`);
+      setShowSubOptions(false);
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to subscribe';
+      toast.error(msg);
+    } finally {
+      setSubLoading(false);
+    }
+  }
 
   return (
     <>
@@ -78,6 +96,35 @@ export default function ProductCard({ product, onCompare, showRank, compact, rec
               <button onClick={() => onCompare(product)} className="text-xs amazon-link border border-gray-300 px-2 py-2 rounded-sm">
                 Compare
               </button>
+            )}
+          </div>
+
+          {/* Subscribe Button */}
+          <div className="relative">
+            <button
+              onClick={() => setShowSubOptions(!showSubOptions)}
+              className="w-full py-1.5 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center gap-1 transition-colors"
+            >
+              <RefreshCw size={12} /> Subscribe & Save
+            </button>
+            {showSubOptions && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border rounded-lg shadow-lg p-2 z-20">
+                <p className="text-[10px] text-gray-500 mb-1.5 font-medium">Choose frequency:</p>
+                <button
+                  onClick={() => handleSubscribe('weekly')}
+                  disabled={subLoading}
+                  className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-blue-50 text-blue-700 font-medium"
+                >
+                  📅 Weekly — ₹{product.price?.toFixed(0)}/week
+                </button>
+                <button
+                  onClick={() => handleSubscribe('monthly')}
+                  disabled={subLoading}
+                  className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-purple-50 text-purple-700 font-medium"
+                >
+                  🗓️ Monthly — ₹{product.price?.toFixed(0)}/month
+                </button>
+              </div>
             )}
           </div>
         </div>
