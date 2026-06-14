@@ -8,7 +8,6 @@ const router = express.Router();
 /**
  * POST /api/feedback
  * Record user feedback on recommendations and trigger learning.
- * Also updates the Thompson Sampling bandit for explore/exploit optimization.
  */
 router.post('/', authOptional, async (req, res) => {
   try {
@@ -26,11 +25,11 @@ router.post('/', authOptional, async (req, res) => {
     // If intent feedback, update bandit for all recommended products
     if (req.body.type === 'intent' && req.body.accepted && req.body.intentId) {
       try {
-        const IntentRequest = require('../models/IntentRequest');
+        const { IntentRequest } = require('../dataStore');
         const intent = await IntentRequest.findById(req.body.intentId);
         if (intent?.recommendedProductIds) {
           for (const pid of intent.recommendedProductIds) {
-            recordBanditReward(pid.toString(), 0.5); // Partial reward for set acceptance
+            recordBanditReward(pid.toString(), 0.5);
           }
         }
       } catch { /* non-critical */ }

@@ -1,16 +1,14 @@
 const express = require('express');
-const Product = require('../models/Product');
+const { Product, User } = require('../dataStore');
 const { parseIntent, rankProducts } = require('../services/intentService');
 const { buildPurchaseProfile, getCooccurringProducts } = require('../services/feedbackLearner');
 const { authOptional } = require('../middleware/auth');
-const User = require('../models/User');
 
 const router = express.Router();
 
 /**
  * POST /api/recommendations/generate
  * Generate product recommendations from a parsed intent or text.
- * Uses multi-signal scoring + collaborative filtering.
  */
 router.post('/generate', authOptional, async (req, res) => {
   const { parsedIntent, text, location } = req.body;
@@ -34,9 +32,13 @@ router.post('/generate', authOptional, async (req, res) => {
     try {
       const cooccurring = await getCooccurringProducts(ranked.map(p => p._id), 3);
       if (cooccurring.length > 0) {
-        const coProducts = await Product.find({ _id: { $in: cooccurring.map(c => c.productId) } });
+        const coProducts = [];
+        for (const c of cooccurring) {
+          const p = await Product.findById(c.productId);
+          if (p) coProducts.push(p);
+        }
         alsoBought = coProducts.map(p => ({
-          ...p.toObject(),
+          ...p,
           recommendationReason: 'Frequently bought together'
         }));
       }

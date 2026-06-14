@@ -10,9 +10,7 @@
  * 6. Session memory (conversational context within a shopping session)
  */
 
-const Order = require('../models/Order');
-const IntentRequest = require('../models/IntentRequest');
-const RestockItem = require('../models/RestockItem');
+const { Order, IntentRequest, RestockItem } = require('../dataStore');
 
 // ─── Time-of-Day Context ─────────────────────────────────────────────────────
 

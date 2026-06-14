@@ -1,9 +1,7 @@
 const express = require('express');
-const Product = require('../models/Product');
-const IntentRequest = require('../models/IntentRequest');
+const { Product, IntentRequest, User } = require('../dataStore');
 const { MISSION_TEMPLATES, parseIntent, rankProducts } = require('../services/intentService');
 const { authOptional } = require('../middleware/auth');
-const User = require('../models/User');
 
 const router = express.Router();
 
@@ -14,14 +12,13 @@ router.get('/templates', (req, res) => {
 /**
  * POST /api/intent/parse
  * Parse natural language into structured intent + ranked products.
- * Uses the deep NLP engine for slot extraction and multi-signal scoring.
  */
 router.post('/parse', authOptional, async (req, res) => {
   const { text, voiceTranscript, imageMetadata } = req.body;
   const input = text || voiceTranscript || imageMetadata?.detectedItem || '';
   if (!input) return res.status(400).json({ error: 'Input required' });
 
-  // Deep parse with new NLP engine
+  // Deep parse with NLP engine
   const parsed = parseIntent(input);
 
   let userPrefs = {};
@@ -48,7 +45,6 @@ router.post('/parse', authOptional, async (req, res) => {
   // 2. Category filter (additive, not restrictive)
   if (parsed.category && parsed.category !== 'general') {
     const catFiltered = candidates.filter(p => p.category === parsed.category);
-    // If boosted categories exist, include those too
     const boosted = parsed.boostedCategories?.length
       ? candidates.filter(p => parsed.boostedCategories.includes(p.category))
       : [];
@@ -82,7 +78,6 @@ router.post('/parse', authOptional, async (req, res) => {
     occasion: parsed.occasion,
     summary: buildSummary(parsed),
     products: ranked,
-    // New enriched fields
     parsedSlots: {
       categories: parsed.categories,
       budget: parsed.budget,
@@ -97,7 +92,7 @@ function buildSummary(parsed) {
   const parts = [`Detected: ${parsed.parsedIntent}`];
   parts.push(`${parsed.urgency} urgency`);
   parts.push(`${Math.round(parsed.confidence * 100)}% confidence`);
-  if (parsed.budget?.max) parts.push(`budget $${parsed.budget.max}`);
+  if (parsed.budget?.max) parts.push(`budget ₹${parsed.budget.max}`);
   if (parsed.brandHints?.length) parts.push(`brands: ${parsed.brandHints.join(', ')}`);
   if (parsed.quantity) parts.push(`qty: ${parsed.quantity}`);
   return parts.join(' · ');

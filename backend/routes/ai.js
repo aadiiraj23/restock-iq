@@ -1,15 +1,8 @@
 /**
  * AI Agent Route - Main Shopping Intelligence Endpoint
- * 
- * Flow: User sends prompt → NLP Deep Parse → Product DB + Scoring → 
- * Feedback-Adjusted Ranking → Valid Product IDs → Substitutions → Response
- * 
- * This is the primary endpoint that makes the app feel like an intelligent agent.
  */
 const express = require('express');
-const Product = require('../models/Product');
-const IntentRequest = require('../models/IntentRequest');
-const User = require('../models/User');
+const { Product, IntentRequest, User } = require('../dataStore');
 const { processPromptWithAI, processAIShoppingRequest, generateSuggestions } = require('../services/aiService');
 const { scoreSubstitutes } = require('../services/scoringEngine');
 const { processFeedback } = require('../services/feedbackLearner');
@@ -20,8 +13,7 @@ const router = express.Router();
 
 /**
  * POST /api/ai/shop
- * Main AI Shopping endpoint — the core "smart agent" experience.
- * Takes a user prompt and returns intelligently ranked products from the database.
+ * Main AI Shopping endpoint.
  */
 router.post('/shop', authRequired, async (req, res) => {
   try {
@@ -37,19 +29,18 @@ router.post('/shop', authRequired, async (req, res) => {
 
     const activeUserId = String(req.user.id);
 
-    // Build ambient context (time, history, emotion, urgency)
+    // Build ambient context
     const ambientContext = await buildAmbientContext(activeUserId, prompt);
 
-    const [allProducts, activeUser] = await Promise.all([
-      Product.find({}).lean(),
-      User.findById(activeUserId).select('-password').lean()
-    ]);
+    const allProducts = await Product.find({});
+    const activeUser = await User.findById(activeUserId);
+    const { password, ...userProfile } = activeUser || {};
 
     const requestResult = await processAIShoppingRequest({
       user_prompt: prompt,
       userId: activeUserId,
       products: allProducts,
-      userProfile: activeUser || {},
+      userProfile: userProfile || {},
       filters
     });
 
@@ -68,11 +59,11 @@ router.post('/shop', authRequired, async (req, res) => {
       recommendedProductIds: requestResult.products.map(p => p._id).filter(Boolean)
     });
 
-    // Build "Buy All" and "Essentials" baskets
+    // Build baskets
     const buyAllBasket = requestResult.products.map(p => ({ _id: p._id, name: p.name, price: p.price, qty: 1, image: p.image }));
     const essentialsBasket = requestResult.products.slice(0, 3).map(p => ({ _id: p._id, name: p.name, price: p.price, qty: 1, image: p.image }));
 
-    // Smart upsell from restock urgency or co-occurrence
+    // Smart upsell
     const smartUpsell = ambientContext.restockUrgent[0] || (requestResult.alsoNeeded[0] ? {
       name: requestResult.alsoNeeded[0].name || 'Related item',
       reason: 'Frequently bought together'
@@ -85,7 +76,6 @@ router.post('/shop', authRequired, async (req, res) => {
       products: requestResult.products,
       alsoNeeded: requestResult.alsoNeeded,
       parsedSlots: requestResult.parsedSlots,
-      // New context-aware fields
       ambientContext: {
         timePeriod: ambientContext.time.period,
         dayPattern: ambientContext.time.dayPattern,
@@ -125,25 +115,18 @@ router.post('/shop', authRequired, async (req, res) => {
 
 /**
  * POST /api/ai/suggest
- * Intelligent autocomplete with category/mission awareness.
  */
 router.post('/suggest', async (req, res) => {
   const { partial } = req.body;
   if (!partial || partial.length < 2) return res.json({ suggestions: [] });
 
-  const products = await Product.find({ stock: { $gt: 0 } })
-    .select('name brand category image price tags')
-    .limit(100);
-
+  const products = await Product.find({ stock: { $gt: 0 } });
   const suggestions = generateSuggestions(partial, products);
-
   res.json({ suggestions });
 });
 
 /**
  * POST /api/ai/substitute
- * Find intelligent substitutes for a product.
- * Uses multi-factor scoring (price, rating, brand, delivery).
  */
 router.post('/substitute', authOptional, async (req, res) => {
   const { productId } = req.body;
@@ -180,7 +163,6 @@ router.post('/substitute', authOptional, async (req, res) => {
 
 /**
  * POST /api/ai/feedback
- * Record user feedback on AI recommendations for learning.
  */
 router.post('/feedback', authOptional, async (req, res) => {
   try {
@@ -201,7 +183,6 @@ router.post('/feedback', authOptional, async (req, res) => {
 
 /**
  * GET /api/ai/insights
- * Return AI-generated insights about user's shopping patterns.
  */
 router.get('/insights', authOptional, async (req, res) => {
   try {
@@ -209,11 +190,8 @@ router.get('/insights', authOptional, async (req, res) => {
     const mlModels = require('../services/mlModels');
     const profile = await buildPurchaseProfile(req.user?.id);
 
-    const intents = await IntentRequest.find(req.user?.id ? { userId: req.user.id } : {})
-      .sort({ createdAt: -1 })
-      .limit(20);
+    const intents = await IntentRequest.find(req.user?.id ? { userId: req.user.id } : {}).sort({ createdAt: -1 }).limit(20);
 
-    // Derive shopping patterns
     const categoryFreq = {};
     const urgencyDist = { high: 0, medium: 0, low: 0 };
     for (const intent of intents) {
@@ -243,7 +221,6 @@ router.get('/insights', authOptional, async (req, res) => {
 
 /**
  * POST /api/ai/similar
- * Find products similar to a given product using ML feature vectors.
  */
 router.post('/similar', async (req, res) => {
   const { productId } = req.body;
@@ -269,8 +246,6 @@ router.post('/similar', async (req, res) => {
 
 /**
  * POST /api/ai/classify
- * Classify a text query using the trained Naive Bayes model.
- * Useful for debugging and showing ML confidence.
  */
 router.post('/classify', async (req, res) => {
   const { text } = req.body;
@@ -289,8 +264,6 @@ router.post('/classify', async (req, res) => {
 
 /**
  * POST /api/ai/context
- * Get ambient context for the current user/session.
- * Used by frontend to show AI reasoning and context chips.
  */
 router.post('/context', authOptional, async (req, res) => {
   try {
@@ -304,8 +277,6 @@ router.post('/context', authOptional, async (req, res) => {
 
 /**
  * POST /api/ai/panic
- * Panic Mode — instant checkout with most-ordered items.
- * Returns pre-built cart based on user's top 10 most-ordered items (30 days).
  */
 router.post('/panic', authRequired, async (req, res) => {
   try {
@@ -328,7 +299,6 @@ router.post('/panic', authRequired, async (req, res) => {
 
 /**
  * POST /api/ai/mood
- * Mood-Based Discovery — curated bundles based on moment/mood.
  */
 router.post('/mood', authOptional, async (req, res) => {
   try {
@@ -336,21 +306,20 @@ router.post('/mood', authOptional, async (req, res) => {
     if (!mood) return res.status(400).json({ error: 'mood is required', availableMoods: Object.keys(MOOD_BUNDLES) });
 
     const bundle = getMoodBundle(mood);
-    const products = await Product.find({
-      stock: { $gt: 0 },
-      $or: [
-        { category: { $in: bundle.categories } },
-        { tags: { $in: bundle.tags } },
-        { name: { $regex: bundle.tags.join('|'), $options: 'i' } }
-      ]
-    }).limit(bundle.maxItems).lean();
+    const allProducts = await Product.find({ stock: { $gt: 0 } });
+
+    // Filter products matching the mood bundle
+    const products = allProducts.filter(p => {
+      const matchesCategory = bundle.categories.includes(p.category);
+      const matchesTags = (p.tags || []).some(t => bundle.tags.includes(t));
+      const matchesName = bundle.tags.some(t => p.name.toLowerCase().includes(t));
+      return matchesCategory || matchesTags || matchesName;
+    }).slice(0, bundle.maxItems);
 
     // Find a surprise item (different category, good rating)
-    const surpriseItem = await Product.findOne({
-      stock: { $gt: 0 },
-      category: { $nin: bundle.categories },
-      rating: { $gte: 4.3 }
-    }).lean();
+    const surpriseItem = allProducts.find(p =>
+      !bundle.categories.includes(p.category) && p.rating >= 4.3
+    );
 
     res.json({
       success: true,
@@ -392,7 +361,6 @@ router.post('/mood', authOptional, async (req, res) => {
 
 /**
  * GET /api/ai/moods
- * List available mood/moment options.
  */
 router.get('/moods', (req, res) => {
   const moods = Object.entries(MOOD_BUNDLES).map(([key, bundle]) => ({
@@ -406,18 +374,6 @@ router.get('/moods', (req, res) => {
 
 /**
  * POST /api/ai/scan
- * Vision Scanner v3 — Multi-modal product recognition with precision scoring.
- * 
- * Pipeline:
- * 1. Frame received (base64 JPEG from webcam)
- * 2. Multi-signal extraction (color histogram, shape detection, OCR, barcode)
- * 3. Product matching against MongoDB catalog with weighted scoring
- * 4. Confidence fusion (raw match score × temporal stability × signal quality)
- * 5. Inventory verification & delivery estimation
- * 6. Return product with precision metrics
- * 
- * In production: calls GPT-4V / Claude Vision / custom YOLO model
- * Demo mode: uses intelligent weighted matching against product DB features
  */
 router.post('/scan', authOptional, async (req, res) => {
   try {
@@ -427,9 +383,7 @@ router.post('/scan', authOptional, async (req, res) => {
     }
 
     const startTime = Date.now();
-
-    // Load product catalog for matching
-    const allProducts = await Product.find({ stock: { $gt: 0 } }).lean();
+    const allProducts = await Product.find({ stock: { $gt: 0 } });
 
     if (allProducts.length === 0) {
       return res.json({
@@ -440,7 +394,7 @@ router.post('/scan', authOptional, async (req, res) => {
       });
     }
 
-    // If frontend already identified the product, verify it exists in DB
+    // If frontend already identified the product, verify
     if (detectedProductId) {
       const verifiedProduct = allProducts.find(p => String(p._id) === String(detectedProductId));
       if (verifiedProduct) {
@@ -477,64 +431,40 @@ router.post('/scan', authOptional, async (req, res) => {
       }
     }
 
-    // ─── Multi-Signal Scoring Engine ─────────────────────────────────────────
-    // Simulate multi-modal analysis: color, shape, text/OCR, barcode, packaging
+    // Multi-Signal Scoring Engine
     const frameSize = frame.length;
-    const signalQuality = Math.min(1.0, frameSize / 50000); // Larger frame = more detail
+    const signalQuality = Math.min(1.0, frameSize / 50000);
 
-    // Score each product with multi-factor weighted matching
     const scoredProducts = allProducts.map(product => {
       let score = 0;
       const signals = [];
 
-      // Signal 1: Brand name text detection (OCR simulation)
-      // Higher-quality frames have better OCR
       const textScore = (0.5 + Math.random() * 0.5) * signalQuality;
-      if (textScore > 0.6) {
-        score += textScore * 0.30;
-        signals.push('ocr_brand');
-      }
+      if (textScore > 0.6) { score += textScore * 0.30; signals.push('ocr_brand'); }
 
-      // Signal 2: Category shape detection
       const shapeScore = 0.4 + Math.random() * 0.6;
-      if (shapeScore > 0.5) {
-        score += shapeScore * 0.20;
-        signals.push('shape_contour');
-      }
+      if (shapeScore > 0.5) { score += shapeScore * 0.20; signals.push('shape_contour'); }
 
-      // Signal 3: Color histogram matching
       const colorScore = 0.5 + Math.random() * 0.5;
       score += colorScore * 0.20;
       signals.push('color_histogram');
 
-      // Signal 4: Barcode detection (most accurate when visible)
       const barcodeVisible = Math.random() > 0.6;
-      if (barcodeVisible) {
-        score += 0.30;
-        signals.push('barcode_exact');
-      }
+      if (barcodeVisible) { score += 0.30; signals.push('barcode_exact'); }
 
-      // Signal 5: Size/packaging classification
       const packagingScore = 0.3 + Math.random() * 0.5;
-      if (packagingScore > 0.5) {
-        score += packagingScore * 0.10;
-        signals.push('packaging_type');
-      }
+      if (packagingScore > 0.5) { score += packagingScore * 0.10; signals.push('packaging_type'); }
 
-      // Normalize score
       score = Math.min(0.99, score);
-
       return { product, score, signals };
     });
 
-    // Sort by score descending
     scoredProducts.sort((a, b) => b.score - a.score);
 
     const topMatch = scoredProducts[0];
     const secondMatch = scoredProducts[1];
     const discriminationGap = topMatch.score - secondMatch.score;
 
-    // Compute fused confidence
     const confidence = Math.min(0.98, topMatch.score * 0.6 + discriminationGap * 0.25 + signalQuality * 0.15);
     const precision = Math.min(0.99, confidence * 0.7 + discriminationGap * 0.3);
 

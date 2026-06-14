@@ -11,9 +11,7 @@
  * Uses exponential moving averages and Bayesian-style updates.
  */
 
-const FeedbackEvent = require('../models/FeedbackEvent');
-const Order = require('../models/Order');
-const IntentRequest = require('../models/IntentRequest');
+const { FeedbackEvent, Order, IntentRequest } = require('../dataStore');
 
 // ─── In-Memory Learning Cache (refreshed periodically) ──────────────────────
 

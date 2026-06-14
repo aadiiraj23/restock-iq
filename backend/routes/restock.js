@@ -1,11 +1,7 @@
 const express = require('express');
-const RestockItem = require('../models/RestockItem');
-const Product = require('../models/Product');
-const Notification = require('../models/Notification');
-const Cart = require('../models/Cart');
+const { RestockItem, Product, Notification, Cart, User } = require('../dataStore');
 const { calculateDepletion, adjustFromFeedback, getBudgetAnalytics, getRestockSchedule, getSmartNotifications, generateUserRestockDashboard } = require('../services/restockService');
 const { authOptional, authRequired } = require('../middleware/auth');
-const User = require('../models/User');
 
 const router = express.Router();
 
@@ -39,15 +35,16 @@ router.post('/items', authOptional, async (req, res) => {
 
   const item = await RestockItem.create({
     userId: req.user?.id,
-    productId,
+    productId: product._id,
     quantity,
     purchaseDate: purchaseDate || new Date(),
     category: product.category,
     ...depletion
   });
 
-  const populated = await RestockItem.findById(item._id).populate('productId');
-  res.status(201).json(populated);
+  // Populate product info
+  item.productId = product;
+  res.status(201).json(item);
 });
 
 // ─── Dashboard (with prediction refresh) ─────────────────────────────────────
@@ -55,12 +52,20 @@ router.post('/items', authOptional, async (req, res) => {
 router.get('/dashboard', authRequired, async (req, res) => {
   try {
     const userId = req.user.id;
-    const [items, user] = await Promise.all([
-      RestockItem.find({ userId, isWishlist: false }).populate('productId').sort({ daysRemaining: 1 }),
-      User.findById(userId).select('-password').lean()
-    ]);
+    const items = await RestockItem.find({ userId, isWishlist: false });
+    
+    // Populate and sort
+    const populatedItems = [];
+    for (const item of items) {
+      const product = await Product.findById(item.productId);
+      populatedItems.push({ ...item, productId: product });
+    }
+    populatedItems.sort((a, b) => (a.daysRemaining || 0) - (b.daysRemaining || 0));
 
-    const dashboard = generateUserRestockDashboard(items, user || {}, new Date());
+    const user = await User.findById(userId);
+    const { password, ...userWithoutPw } = user || {};
+
+    const dashboard = generateUserRestockDashboard(populatedItems, userWithoutPw || {}, new Date());
 
     res.json({
       userId,
@@ -75,18 +80,22 @@ router.get('/dashboard', authRequired, async (req, res) => {
 
 router.get('/calendar', authOptional, async (req, res) => {
   const filter = req.user?.id ? { userId: req.user.id } : {};
-  const items = await RestockItem.find(filter).populate('productId');
+  const items = await RestockItem.find(filter);
 
-  const events = items.map(item => ({
-    id: item._id,
-    title: item.productId?.name || 'Product',
-    date: item.expectedFinishDate,
-    daysRemaining: item.daysRemaining,
-    urgency: item.urgency,
-    category: item.category,
-    confidence: item.confidence,
-    price: item.productId?.price
-  }));
+  const events = [];
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    events.push({
+      id: item._id,
+      title: product?.name || 'Product',
+      date: item.expectedFinishDate,
+      daysRemaining: item.daysRemaining,
+      urgency: item.urgency,
+      category: item.category,
+      confidence: item.confidence,
+      price: product?.price
+    });
+  }
 
   res.json(events);
 });
@@ -95,10 +104,13 @@ router.get('/calendar', authOptional, async (req, res) => {
 
 router.post('/feedback', authOptional, async (req, res) => {
   const { itemId, type, note } = req.body;
-  const item = await RestockItem.findById(itemId).populate('productId');
+  const item = await RestockItem.findById(itemId);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
+  const product = await Product.findById(item.productId);
+
   // Push feedback to history first
+  if (!item.feedbackHistory) item.feedbackHistory = [];
   item.feedbackHistory.push({ type, note, date: new Date() });
 
   // Use Bayesian adjustment with full history
@@ -116,20 +128,33 @@ router.post('/feedback', authOptional, async (req, res) => {
 
   // Recalculate confidence (more feedback = more confident)
   item.confidence = Math.min(0.98, 0.8 + item.feedbackHistory.length * 0.03);
-  await item.save();
 
+  // Save back
+  await RestockItem.findByIdAndUpdate(item._id, item);
+
+  item.productId = product;
   res.json(item);
 });
 
 // ─── Smart Bundle (budget-aware) ─────────────────────────────────────────────
 
 router.post('/bundle', authOptional, async (req, res) => {
-  const filter = req.user?.id ? { userId: req.user.id, daysRemaining: { $lte: 7 } } : { daysRemaining: { $lte: 7 } };
-  const dueItems = await RestockItem.find(filter).populate('productId');
+  const filter = req.user?.id ? { userId: req.user.id } : {};
+  const allItems = await RestockItem.find(filter);
+  const dueItems = allItems.filter(i => i.daysRemaining <= 7);
 
-  const productIds = dueItems.map(i => i.productId?._id).filter(Boolean);
+  // Populate products
+  const populatedDueItems = [];
+  for (const item of dueItems) {
+    const product = await Product.findById(item.productId);
+    if (product) {
+      populatedDueItems.push({ ...item, productId: product });
+    }
+  }
+
+  const productIds = populatedDueItems.map(i => i.productId?._id).filter(Boolean);
   let total = 0;
-  const items = dueItems.map(i => {
+  const items = populatedDueItems.map(i => {
     total += (i.productId?.price || 0) * i.quantity;
     return { productId: i.productId._id, quantity: i.quantity, price: i.productId.price };
   });
@@ -141,23 +166,23 @@ router.post('/bundle', authOptional, async (req, res) => {
     monthlyBudget = user?.monthlyBudget || 150;
   }
 
-  const overBudget = total > monthlyBudget * 0.5; // Alert if bundle is > 50% of monthly budget
+  const overBudget = total > monthlyBudget * 0.5;
 
   const cart = await Cart.create({
     userId: req.user?.id,
     items,
     total,
     source: 'restock',
-    intentSummary: `Restock bundle - ${dueItems.length} items`
+    intentSummary: `Restock bundle - ${populatedDueItems.length} items`
   });
 
   res.json({
     cartId: cart._id,
-    items: dueItems,
+    items: populatedDueItems,
     total: Math.round(total * 100) / 100,
-    message: `${dueItems.length} items added to bundle`,
-    budgetWarning: overBudget ? `This bundle is $${total.toFixed(2)} — more than 50% of your $${monthlyBudget} monthly budget` : null,
-    savings: dueItems.reduce((s, i) => {
+    message: `${populatedDueItems.length} items added to bundle`,
+    budgetWarning: overBudget ? `This bundle is ₹${total.toFixed(2)} — more than 50% of your ₹${monthlyBudget} monthly budget` : null,
+    savings: populatedDueItems.reduce((s, i) => {
       const orig = i.productId?.originalPrice || i.productId?.price || 0;
       return s + (orig - (i.productId?.price || 0));
     }, 0).toFixed(2)
@@ -175,19 +200,34 @@ router.post('/budget', authRequired, async (req, res) => {
 
 router.get('/analytics', authOptional, async (req, res) => {
   const filter = req.user?.id ? { userId: req.user.id } : {};
-  const items = await RestockItem.find(filter).populate('productId');
-  const monthlyBudget = req.user?.id ? (await User.findById(req.user.id))?.monthlyBudget || 150 : 150;
-  const analytics = getBudgetAnalytics(items, monthlyBudget);
+  const items = await RestockItem.find(filter);
+  
+  // Populate
+  const populatedItems = [];
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    populatedItems.push({ ...item, productId: product });
+  }
+
+  const monthlyBudget = req.user?.id ? ((await User.findById(req.user.id))?.monthlyBudget || 150) : 150;
+  const analytics = getBudgetAnalytics(populatedItems, monthlyBudget);
   res.json(analytics);
 });
 
-// ─── Schedule (NEW: optimal reorder timeline) ────────────────────────────────
+// ─── Schedule (optimal reorder timeline) ─────────────────────────────────────
 
 router.get('/schedule', authOptional, async (req, res) => {
   const filter = req.user?.id ? { userId: req.user.id } : {};
-  const items = await RestockItem.find(filter).populate('productId');
-  const monthlyBudget = req.user?.id ? (await User.findById(req.user.id))?.monthlyBudget || 150 : 150;
-  const schedule = getRestockSchedule(items, monthlyBudget);
+  const items = await RestockItem.find(filter);
+  
+  const populatedItems = [];
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    populatedItems.push({ ...item, productId: product });
+  }
+
+  const monthlyBudget = req.user?.id ? ((await User.findById(req.user.id))?.monthlyBudget || 150) : 150;
+  const schedule = getRestockSchedule(populatedItems, monthlyBudget);
   res.json(schedule);
 });
 
@@ -195,7 +235,14 @@ router.get('/schedule', authOptional, async (req, res) => {
 
 router.get('/notifications', authOptional, async (req, res) => {
   const filter = req.user?.id ? { userId: req.user.id } : {};
-  const items = await RestockItem.find(filter).populate('productId');
+  const items = await RestockItem.find(filter);
+
+  // Populate
+  const populatedItems = [];
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    populatedItems.push({ ...item, productId: product });
+  }
 
   // Generate smart notifications from predictor
   let userProfile = {};
@@ -204,7 +251,7 @@ router.get('/notifications', authOptional, async (req, res) => {
     userProfile = await buildPurchaseProfile(req.user.id);
   }
 
-  const smartNotifs = getSmartNotifications(items, userProfile);
+  const smartNotifs = getSmartNotifications(populatedItems, userProfile);
 
   // Also check stored notifications
   const storedFilter = req.user?.id ? { userId: req.user.id, status: 'active' } : { status: 'active' };
@@ -224,7 +271,7 @@ router.get('/notifications', authOptional, async (req, res) => {
       triggerTime: new Date(),
       status: 'active'
     })),
-    ...storedNotifs.map(n => n.toObject())
+    ...storedNotifs
   ];
 
   res.json(merged.slice(0, 15));
@@ -234,11 +281,18 @@ router.get('/notifications', authOptional, async (req, res) => {
 
 router.get('/history', authOptional, async (req, res) => {
   const filter = req.user?.id ? { userId: req.user.id } : {};
-  const items = await RestockItem.find(filter).populate('productId').sort({ updatedAt: -1 });
-  res.json(items);
+  const items = await RestockItem.find(filter).sort({ updatedAt: -1 });
+  
+  const populatedItems = [];
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    populatedItems.push({ ...item, productId: product });
+  }
+
+  res.json(populatedItems);
 });
 
-// ─── Predict (NEW: predict depletion for a product without tracking) ─────────
+// ─── Predict (predict depletion for a product without tracking) ──────────────
 
 router.post('/predict', authOptional, async (req, res) => {
   const { productId, quantity = 1 } = req.body;

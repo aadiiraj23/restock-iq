@@ -1,6 +1,5 @@
 const express = require('express');
-const Cart = require('../models/Cart');
-const Product = require('../models/Product');
+const { Cart, Product } = require('../dataStore');
 const { findSubstitutes } = require('../services/intentService');
 const { authOptional } = require('../middleware/auth');
 
@@ -40,13 +39,31 @@ router.post('/build', authOptional, async (req, res) => {
     intentSummary
   });
 
-  const populated = await Cart.findById(cart._id).populate('items.productId');
-  res.json(populated);
+  // Populate product details
+  const populatedItems = [];
+  for (const item of cart.items) {
+    const product = await Product.findById(item.productId);
+    populatedItems.push({ ...item, productId: product });
+  }
+  cart.items = populatedItems;
+
+  res.json(cart);
 });
 
 router.get('/:id', async (req, res) => {
-  const cart = await Cart.findById(req.params.id).populate('items.productId');
+  const cart = await Cart.findById(req.params.id);
   if (!cart) return res.status(404).json({ error: 'Cart not found' });
+
+  // Populate product details
+  if (cart.items) {
+    const populatedItems = [];
+    for (const item of cart.items) {
+      const product = await Product.findById(item.productId);
+      populatedItems.push({ ...item, productId: product });
+    }
+    cart.items = populatedItems;
+  }
+
   res.json(cart);
 });
 
@@ -57,7 +74,18 @@ router.put('/:id', async (req, res) => {
     const product = await Product.findById(item.productId);
     if (product) total += product.price * item.quantity;
   }
-  const cart = await Cart.findByIdAndUpdate(req.params.id, { items, total }, { new: true }).populate('items.productId');
+  const cart = await Cart.findByIdAndUpdate(req.params.id, { items, total }, { new: true });
+
+  // Populate product details
+  if (cart && cart.items) {
+    const populatedItems = [];
+    for (const item of cart.items) {
+      const product = await Product.findById(item.productId);
+      populatedItems.push({ ...item, productId: product });
+    }
+    cart.items = populatedItems;
+  }
+
   res.json(cart);
 });
 

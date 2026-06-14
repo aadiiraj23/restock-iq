@@ -1,17 +1,24 @@
 const express = require('express');
-const Cart = require('../models/Cart');
-const Order = require('../models/Order');
-const Product = require('../models/Product');
+const { Cart, Order, Product } = require('../dataStore');
 const { authOptional } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.post('/prepare', authOptional, async (req, res) => {
   const { cartId, address, deliverySlot, paymentMethod } = req.body;
-  const cart = await Cart.findById(cartId).populate('items.productId');
+  const cart = await Cart.findById(cartId);
   if (!cart) return res.status(404).json({ error: 'Cart not found' });
 
-  const orderItems = cart.items.map(item => ({
+  // Populate product details in cart items
+  const populatedItems = [];
+  for (const item of cart.items) {
+    const product = await Product.findById(item.productId?._id || item.productId);
+    if (product) {
+      populatedItems.push({ ...item, productId: product });
+    }
+  }
+
+  const orderItems = populatedItems.map(item => ({
     productId: item.productId._id,
     name: item.productId.name,
     quantity: item.quantity,
@@ -25,7 +32,7 @@ router.post('/prepare', authOptional, async (req, res) => {
     cartId: cart._id,
     items: orderItems,
     total: cart.total,
-    address: address || { street: '123 Main St', city: 'Seattle', state: 'WA', zip: '98101' },
+    address: address || { street: '123 Main St', city: 'Mumbai', state: 'MH', zip: '400001' },
     deliverySlot: deliverySlot || 'Express - Today',
     paymentMethod: paymentMethod || 'card',
     paymentStatus: 'paid',
@@ -69,7 +76,8 @@ router.get('/orders/:id/status', async (req, res) => {
   }
 
   order.trackingSteps = steps;
-  await order.save();
+  // Save back
+  await Order.findByIdAndUpdate(order._id, { trackingSteps: steps, fulfillmentStatus: order.fulfillmentStatus });
 
   res.json({ orderId: order._id, status: order.fulfillmentStatus, eta: order.eta, trackingSteps: steps });
 });
@@ -80,15 +88,6 @@ router.get('/orders', authOptional, async (req, res) => {
   res.json(orders);
 });
 
-/**
- * POST /api/checkout/instant
- * Atomic Instant Checkout — "Swipe to Resolve"
- * Bypasses cart entirely. Single-item express purchase:
- * → Pulls default payment method
- * → Uses primary address
- * → Creates order in one atomic operation
- * → Dispatches courier immediately
- */
 router.post('/instant', authOptional, async (req, res) => {
   try {
     const { productId, productName, price, quantity = 1, address, paymentMethod = 'default_token' } = req.body;
@@ -97,11 +96,10 @@ router.post('/instant', authOptional, async (req, res) => {
       return res.status(400).json({ error: 'productId or productName is required' });
     }
 
-    // Resolve product from DB if productId provided
     let orderItem = { productId, name: productName, quantity, price: price || 0, image: null };
     if (productId && productId !== 'null') {
       try {
-        const product = await Product.findById(productId).lean();
+        const product = await Product.findById(productId);
         if (product) {
           orderItem = {
             productId: product._id,
@@ -114,7 +112,7 @@ router.post('/instant', authOptional, async (req, res) => {
       } catch { /* Use provided data */ }
     }
 
-    const resolvedAddress = address || { street: '123 Main St', city: 'Seattle', state: 'WA', zip: '98101' };
+    const resolvedAddress = address || { street: '123 Main St', city: 'Mumbai', state: 'MH', zip: '400001' };
     const total = orderItem.price * quantity;
     const now = new Date();
 

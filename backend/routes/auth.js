@@ -6,7 +6,7 @@ try {
   bcrypt = require('bcryptjs');
 }
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { User } = require('../dataStore');
 const { authRequired } = require('../middleware/auth');
 
 const router = express.Router();
@@ -29,7 +29,7 @@ function buildHouseholdProfile(user) {
 function signToken(user) {
   return jwt.sign(
     { id: user._id, email: user.email },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET || 'restock-iq-secret-key',
     { expiresIn: '7d' }
   );
 }
@@ -84,9 +84,10 @@ router.post('/login', async (req, res) => {
 
 router.get('/me', authRequired, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ householdProfile: buildHouseholdProfile(user), user });
+    const { password, ...userWithoutPw } = user;
+    res.json({ householdProfile: buildHouseholdProfile(user), user: userWithoutPw });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -94,9 +95,10 @@ router.get('/me', authRequired, async (req, res) => {
 
 router.put('/preferences', authRequired, async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.user.id, { $set: req.body }, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.user.id, { ...req.body }, { new: true });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ householdProfile: buildHouseholdProfile(user), user });
+    const { password, ...userWithoutPw } = user;
+    res.json({ householdProfile: buildHouseholdProfile(user), user: userWithoutPw });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -104,9 +106,10 @@ router.put('/preferences', authRequired, async (req, res) => {
 
 router.put('/household', authRequired, async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.user.id, { household: req.body }, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.user.id, { household: req.body }, { new: true });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ householdProfile: buildHouseholdProfile(user), user });
+    const { password, ...userWithoutPw } = user;
+    res.json({ householdProfile: buildHouseholdProfile(user), user: userWithoutPw });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -114,9 +117,10 @@ router.put('/household', authRequired, async (req, res) => {
 
 router.put('/budget', authRequired, async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.user.id, { monthlyBudget: req.body.monthlyBudget }, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.user.id, { monthlyBudget: req.body.monthlyBudget }, { new: true });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ householdProfile: buildHouseholdProfile(user), user });
+    const { password, ...userWithoutPw } = user;
+    res.json({ householdProfile: buildHouseholdProfile(user), user: userWithoutPw });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
