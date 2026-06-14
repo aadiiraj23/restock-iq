@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { CreditCard, MapPin, Clock, Zap, Sparkles, Plus, Brain, ShoppingBag } from 'lucide-react';
-import { useCartStore, useAiCartStore, useRestockStore } from '../store';
+import { useCartStore, useAiCartStore, useRestockStore, useBuyNowStore } from '../store';
 import { checkout } from '../api';
 
 // ─── AI pre-checkout suggestions (shown BEFORE placing order) ─────────────────
@@ -18,15 +18,31 @@ export default function CheckoutPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const isAiCart = params.get('source') === 'ai';
+  const isBuyNow = params.get('source') === 'buynow';
 
   // Use the correct cart based on source
   const regularCart = useCartStore();
   const aiCart = useAiCartStore();
-  const activeCart = isAiCart ? aiCart : regularCart;
-  const items = activeCart.items || [];
-  const total = activeCart.total || 0;
-  const eta = activeCart.eta || '25 mins';
-  const intentSummary = isAiCart ? aiCart.intentSummary : regularCart.intentSummary;
+  const buyNowStore = useBuyNowStore();
+
+  // Build items/total/eta depending on source
+  let items, total, eta, intentSummary;
+  if (isBuyNow && buyNowStore.item) {
+    items = [buyNowStore.item];
+    total = buyNowStore.total;
+    eta = buyNowStore.eta;
+    intentSummary = 'Buy Now — Single Item';
+  } else if (isAiCart) {
+    items = aiCart.items || [];
+    total = aiCart.total || 0;
+    eta = aiCart.eta || '25 mins';
+    intentSummary = aiCart.intentSummary;
+  } else {
+    items = regularCart.items || [];
+    total = regularCart.total || 0;
+    eta = regularCart.eta || '25 mins';
+    intentSummary = regularCart.intentSummary;
+  }
 
   const [loading, setLoading] = useState(false);
   const [address, setAddress] = useState({ street: '410 Terry Ave N', city: 'Seattle', state: 'WA', zip: '98109' });
@@ -72,15 +88,17 @@ export default function CheckoutPage() {
         deliverySlot: 'Express - Today',
         paymentMethod: 'card'
       });
-      localStorage.setItem('lastOrder', JSON.stringify({ items: orderItems, total: orderTotal, eta, address, placedAt: new Date().toISOString(), source: isAiCart ? 'ai' : 'manual' }));
+      localStorage.setItem('lastOrder', JSON.stringify({ items: orderItems, total: orderTotal, eta, address, placedAt: new Date().toISOString(), source: isAiCart ? 'ai' : isBuyNow ? 'buynow' : 'manual' }));
       resetRestockItems();
-      if (isAiCart) useAiCartStore.getState().clearAiCart();
+      if (isBuyNow) useBuyNowStore.getState().clearBuyNow();
+      else if (isAiCart) useAiCartStore.getState().clearAiCart();
       else useCartStore.getState().clearCart();
       navigate(`/order/${data.orderId}`);
     } catch {
-      localStorage.setItem('lastOrder', JSON.stringify({ items: orderItems, total: orderTotal, eta, address, placedAt: new Date().toISOString(), source: isAiCart ? 'ai' : 'manual' }));
+      localStorage.setItem('lastOrder', JSON.stringify({ items: orderItems, total: orderTotal, eta, address, placedAt: new Date().toISOString(), source: isAiCart ? 'ai' : isBuyNow ? 'buynow' : 'manual' }));
       resetRestockItems();
-      if (isAiCart) useAiCartStore.getState().clearAiCart();
+      if (isBuyNow) useBuyNowStore.getState().clearBuyNow();
+      else if (isAiCart) useAiCartStore.getState().clearAiCart();
       else useCartStore.getState().clearCart();
       navigate(`/order/demo-${Date.now()}`);
     } finally {
@@ -112,15 +130,20 @@ export default function CheckoutPage() {
             <Sparkles size={12} /> AI Cart
           </span>
         )}
+        {isBuyNow && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 text-violet-700 px-3 py-1 text-xs font-bold">
+            <Zap size={12} /> Buy Now — Single Item
+          </span>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {/* AI Intent Summary */}
-          {isAiCart && intentSummary && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center gap-2">
-              <Brain size={16} className="text-amazon-orange shrink-0" />
-              <p className="text-sm text-slate-700"><strong>AI Mission:</strong> {intentSummary}</p>
+          {(isAiCart || isBuyNow) && intentSummary && (
+            <div className={`border rounded-lg px-4 py-3 flex items-center gap-2 ${isBuyNow ? 'bg-violet-50 border-violet-200' : 'bg-amber-50 border-amber-200'}`}>
+              <Brain size={16} className={isBuyNow ? 'text-violet-600 shrink-0' : 'text-amazon-orange shrink-0'} />
+              <p className="text-sm text-slate-700"><strong>{isBuyNow ? 'Buy Now:' : 'AI Mission:'}</strong> {intentSummary}</p>
             </div>
           )}
 

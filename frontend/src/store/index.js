@@ -386,6 +386,28 @@ export const useAiCartStore = create(
   )
 );
 
+// ─── Buy Now Store (separate single-item cart for instant purchase) ───────────
+// This store holds ONE product for "Buy Now" flow — completely independent of main cart.
+
+export const useBuyNowStore = create(
+  (set) => ({
+    item: null,
+    total: 0,
+    eta: '15 mins',
+
+    setBuyNowItem: (product) => {
+      const price = typeof product.price === 'number' ? product.price : 0;
+      set({
+        item: { ...product, _id: product._id || product.id, quantity: 1, price },
+        total: price,
+        eta: product.deliveryETA || '15 mins'
+      });
+    },
+
+    clearBuyNow: () => set({ item: null, total: 0, eta: '15 mins' })
+  })
+);
+
 // ─── Restock Store — ML PREDICTION ENGINE ────────────────────────────────────
 // Exponential smoothing, seasonal decomposition, Bayesian confidence,
 // household-scaled consumption curves, feedback-loop learning
@@ -437,12 +459,14 @@ const SEED_ITEMS = (() => {
   const now = Date.now();
   const day = 86400000;
   const raw = [
-    { _id: 'ri1', productName: 'Cetaphil Gentle Skin Cleanser (200ml)', category: 'face_wash', brand: 'Cetaphil', volume: '200ml', price: 8.99, image: null, purchaseDate: new Date(now - 51 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
-    { _id: 'ri2', productName: 'Colgate Total Toothpaste (150g)', category: 'toothpaste', brand: 'Colgate', volume: '150g', price: 4.99, image: null, purchaseDate: new Date(now - 27 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri1', productName: 'Cetaphil Gentle Skin Cleanser (200ml)', category: 'face_wash', brand: 'Cetaphil', volume: '200ml', price: 8.99, image: null, purchaseDate: new Date(now - 58 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri2', productName: 'Colgate Total Toothpaste (150g)', category: 'toothpaste', brand: 'Colgate', volume: '150g', price: 4.99, image: null, purchaseDate: new Date(now - 29 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
     { _id: 'ri3', productName: 'Head & Shoulders Shampoo (400ml)', category: 'shampoo', brand: 'Head & Shoulders', volume: '400ml', price: 6.97, image: null, purchaseDate: new Date(now - 17 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
-    { _id: 'ri4', productName: 'Dawn Ultra Dish Soap (500ml)', category: 'dish_soap', brand: 'Dawn', volume: '500ml', price: 3.97, image: null, purchaseDate: new Date(now - 20 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri4', productName: 'Dawn Ultra Dish Soap (500ml)', category: 'dish_soap', brand: 'Dawn', volume: '500ml', price: 3.97, image: null, purchaseDate: new Date(now - 28 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
     { _id: 'ri5', productName: 'Nivea Body Lotion (400ml)', category: 'body_lotion', brand: 'Nivea', volume: '400ml', price: 7.49, image: null, purchaseDate: new Date(now - 35 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
-    { _id: 'ri6', productName: 'Optimum Nutrition Whey Protein (1kg)', category: 'protein_powder', brand: 'ON', volume: '1kg', price: 34.99, image: null, purchaseDate: new Date(now - 24 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri6', productName: 'Optimum Nutrition Whey Protein (1kg)', category: 'protein_powder', brand: 'ON', volume: '1kg', price: 34.99, image: null, purchaseDate: new Date(now - 28 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri7', productName: 'Tide Liquid Detergent (92oz)', category: 'detergent', brand: 'Tide', volume: '92oz', price: 12.97, image: null, purchaseDate: new Date(now - 34 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri8', productName: 'Sensodyne Toothpaste (100g)', category: 'toothpaste', brand: 'Sensodyne', volume: '100g', price: 6.49, image: null, purchaseDate: new Date(now - 10 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
   ];
   return raw.map(item => ({ ...item, ...mlPredictItem(item, 1) }));
 })();
@@ -540,5 +564,6 @@ export default {
   useCartStore,
   useIntentStore,
   useAiCartStore,
+  useBuyNowStore,
   useRestockStore
 };

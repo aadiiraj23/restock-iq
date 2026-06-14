@@ -47,7 +47,8 @@ export const ai = {
   context: (data) => api.post('/ai/context', data),
   panic: () => api.post('/ai/panic'),
   mood: (data) => api.post('/ai/mood', data),
-  moods: () => api.get('/ai/moods')
+  moods: () => api.get('/ai/moods'),
+  scan: (data) => api.post('/ai/scan', data)
 };
 
 // ─── Cart ────────────────────────────────────────────────────────────────────
@@ -64,7 +65,8 @@ export const cart = {
 export const checkout = {
   prepare: (data) => api.post('/checkout/prepare', data),
   getOrderStatus: (id) => api.get(`/checkout/orders/${id}/status`),
-  getOrders: () => api.get('/checkout/orders')
+  getOrders: () => api.get('/checkout/orders'),
+  instant: (data) => api.post('/checkout/instant', data)
 };
 
 // ─── Restock (predictive replenishment) ──────────────────────────────────────

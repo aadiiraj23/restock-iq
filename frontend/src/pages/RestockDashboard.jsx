@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { BarChart3, CalendarDays, CheckCircle2, Flame, Loader2, Package, RefreshCw, ShieldAlert, ShoppingCart, Sparkles, Clock, TrendingDown, Plus, X } from 'lucide-react';
-import { useCartStore, useRestockStore } from '../store';
+import { Link, useNavigate } from 'react-router-dom';
+import { BarChart3, CalendarDays, CheckCircle2, Flame, Loader2, Package, RefreshCw, ShieldAlert, ShoppingCart, Sparkles, Clock, TrendingDown, Plus, X, Home, Zap } from 'lucide-react';
+import { useCartStore, useRestockStore, useBuyNowStore } from '../store';
+import TamagotchiHomeView from '../components/TamagotchiHomeView';
+import SwipeToResolve from '../components/SwipeToResolve';
 
 const URGENCY_COLORS = {
   CRITICAL: { bg: 'bg-red-50', border: 'border-red-300', bar: 'bg-red-500', chip: 'bg-red-100 text-red-700', text: 'text-red-700' },
@@ -10,11 +12,15 @@ const URGENCY_COLORS = {
 };
 
 export default function RestockDashboard() {
+  const navigate = useNavigate();
   const { items, feedbackItem, addTrackedItem, removeTrackedItem, reorderItem, updateHousehold, householdSize, budget, getMetrics, getAlerts } = useRestockStore();
   const addItem = useCartStore(s => s.addItem);
+  const setBuyNowItem = useBuyNowStore(s => s.setBuyNowItem);
   const [feedbackLoading, setFeedbackLoading] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newItem, setNewItem] = useState({ productName: '', category: '', brand: '', volume: '', price: '' });
+  const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'tamagotchi'
+  const [swipeResolveItem, setSwipeResolveItem] = useState(null); // item for instant checkout
 
   const metrics = getMetrics();
   const alerts = getAlerts();
@@ -28,6 +34,11 @@ export default function RestockDashboard() {
 
   const handleReorder = (item) => {
     addItem({ _id: item._id, name: item.productName, brand: item.brand, price: item.price, image: item.image, category: item.category, deliveryETA: '20 mins', rankReason: '🔄 Restock' });
+  };
+
+  const handleBuyNow = (item) => {
+    setBuyNowItem({ _id: item._id, name: item.productName, brand: item.brand, price: item.price, image: item.image, category: item.category, deliveryETA: '15 mins', size: item.volume });
+    navigate('/checkout?source=buynow');
   };
 
   const handleAddItem = () => {
@@ -60,6 +71,9 @@ export default function RestockDashboard() {
             <p className="text-sm text-slate-500 mt-1">AI-powered consumption tracking · Household size: {householdSize}</p>
           </div>
           <div className="flex gap-2">
+            <button onClick={() => setViewMode(viewMode === 'grid' ? 'tamagotchi' : 'grid')} className={`inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-bold transition ${viewMode === 'tamagotchi' ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'border bg-white text-slate-600 hover:bg-amber-50'}`}>
+              <Home size={14} /> {viewMode === 'tamagotchi' ? 'Living Home ✨' : 'Living Home'}
+            </button>
             <button onClick={() => setShowAddForm(!showAddForm)} className="inline-flex items-center gap-1 rounded-lg bg-amazon-orange text-white px-3 py-2 text-sm font-bold hover:bg-amazon-orange-dark"><Plus size={14} /> Track Item</button>
             <Link to="/restock/calendar" className="inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-2 text-sm hover:bg-slate-50"><CalendarDays size={14} /> Calendar</Link>
             <Link to="/restock/analytics" className="inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-2 text-sm hover:bg-slate-50"><BarChart3 size={14} /> Analytics</Link>
@@ -119,6 +133,9 @@ export default function RestockDashboard() {
         </div>
 
         {/* Product Cards */}
+        {viewMode === 'tamagotchi' ? (
+          <TamagotchiHomeView />
+        ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
           {sortedItems.map(item => {
             const colors = URGENCY_COLORS[item.urgencyTier] || URGENCY_COLORS.SAFE;
@@ -168,9 +185,12 @@ export default function RestockDashboard() {
                 )}
 
                 {/* Actions */}
+                <button onClick={() => handleBuyNow(item)} className={`btn-ripple w-full mb-2 rounded-xl text-white text-xs font-bold py-3 active:scale-95 flex items-center justify-center gap-1.5 shadow-md transition-all duration-200 ${item.urgencyTier === 'CRITICAL' ? 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700' : 'bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700'}`}>
+                  <Zap size={13} /> {item.urgencyTier === 'CRITICAL' ? 'Buy Now — Urgent' : 'Buy Now — Skip Cart'}
+                </button>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => handleReorder(item)} className="btn-ripple rounded-xl bg-amazon-orange text-white text-xs font-bold py-2.5 hover:bg-amazon-orange-dark hover:shadow-lg active:scale-95 flex items-center justify-center gap-1 transition-all duration-200">
-                    <ShoppingCart size={13} /> Reorder
+                    <ShoppingCart size={13} /> Add to Cart
                   </button>
                   <button onClick={() => handleFeedback(item._id, 'finished_early')} disabled={isBusy} className="btn-ripple rounded-xl border border-slate-300 bg-white text-xs font-medium py-2.5 hover:bg-red-50 hover:border-red-300 active:scale-95 flex items-center justify-center gap-1 disabled:opacity-50 transition-all duration-200">
                     {isBusy ? <Loader2 size={13} className="animate-spin" /> : <Flame size={13} className="text-red-500" />} Finished Early
@@ -183,6 +203,7 @@ export default function RestockDashboard() {
             );
           })}
         </div>
+        )}
 
         {/* Quick Restock Footer */}
         {(metrics.critical + metrics.warning) > 0 && (
@@ -197,6 +218,20 @@ export default function RestockDashboard() {
           </div>
         )}
       </div>
+
+      {/* ─── Swipe-to-Resolve Overlay ───────────────────────────────── */}
+      {swipeResolveItem && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setSwipeResolveItem(null)} />
+          <div className="relative z-10 w-full max-w-sm mx-4 mb-4 sm:mb-0">
+            <SwipeToResolve
+              item={swipeResolveItem}
+              onComplete={() => { setSwipeResolveItem(null); }}
+              onDismiss={() => setSwipeResolveItem(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -21,6 +21,7 @@ export const aiSuggest = (data) => ai.suggest(data);
 export const aiSubstitute = (data) => ai.substitute(data);
 export const aiFeedback = (data) => ai.feedback(data);
 export const aiInsights = () => ai.insights();
+export const aiScan = (data) => ai.scan(data);
 
 export const generateRecommendations = (data) => api.post('/recommendations/generate', data);
 

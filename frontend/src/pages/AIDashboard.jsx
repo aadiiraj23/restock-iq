@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Mic, MicOff, Loader2, Sparkles, Brain, ShoppingCart, Zap, Clock, Package, Plus, Minus, Trash2, CheckCircle, X, AlertCircle, ArrowRight, Camera, SlidersHorizontal, AlertTriangle } from 'lucide-react';
+import { Search, Mic, MicOff, Loader2, Sparkles, Brain, ShoppingCart, Zap, Clock, Package, Plus, Minus, Trash2, CheckCircle, X, AlertCircle, ArrowRight, Camera, SlidersHorizontal, AlertTriangle, Video } from 'lucide-react';
 import { ai } from '../api';
 import { useAuthStore, useIntentStore, useCartStore, useAiCartStore } from '../store';
+import WebcamScanner from '../components/WebcamScanner';
+import BuyNowOverlay from '../components/BuyNowOverlay';
 
 // ─── Enhanced prompts for Quick Missions ──────────────────────────────────────
 const QUICK_MISSIONS = [
@@ -195,6 +197,10 @@ export default function AIDashboard() {
   const [filters, setFilters] = useState({ price: 'any', delivery: 'any', category: 'all', brand: '', dietary: [] });
   // Panic/Urgency notification (AI-triggered, not a button)
   const [panicNotification, setPanicNotification] = useState(null);
+  // Webcam Scanner
+  const [showWebcamScanner, setShowWebcamScanner] = useState(false);
+  // Buy Now overlay
+  const [buyNowProduct, setBuyNowProduct] = useState(null);
 
   const { user, householdProfile } = useAuthStore();
   const { trackMission, setCurrentSlots, setAiResults } = useIntentStore();
@@ -472,6 +478,39 @@ export default function AIDashboard() {
           </div>
         </div>
 
+        {/* ─── Vision Scanner Option ──────────────────────────────── */}
+        <div className="mb-8">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Instant Vision Scan</p>
+          <button
+            onClick={() => setShowWebcamScanner(true)}
+            className="w-full rounded-2xl border-2 border-dashed border-emerald-300 bg-gradient-to-r from-emerald-50 to-teal-50 p-5 hover:border-emerald-400 hover:from-emerald-100 hover:to-teal-100 transition group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 rounded-2xl bg-emerald-500 flex items-center justify-center shadow-lg group-hover:scale-105 transition">
+                <Video size={24} className="text-white" />
+              </div>
+              <div className="flex-1 text-left">
+                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                  📷 Live Camera Scanner
+                  <span className="text-[10px] font-semibold bg-emerald-500 text-white px-2 py-0.5 rounded-full">NEW</span>
+                </h3>
+                <p className="text-sm text-slate-600 mt-0.5">
+                  Hold empty/low items to your camera — AI instantly identifies products, verifies local inventory, and builds your express checkout cart in real-time.
+                </p>
+                <p className="text-xs text-emerald-600 mt-1 font-medium flex items-center gap-1">
+                  <Zap size={12} /> Zero typing · Auto-detect · Express delivery in 11 mins
+                </p>
+              </div>
+              <ArrowRight size={20} className="text-emerald-500 shrink-0 group-hover:translate-x-1 transition" />
+            </div>
+          </button>
+        </div>
+
+        {/* ─── Webcam Scanner Modal ───────────────────────────────── */}
+        {showWebcamScanner && (
+          <WebcamScanner onClose={() => setShowWebcamScanner(false)} />
+        )}
+
         {/* ─── Loading ────────────────────────────────────────────── */}
         {loading && (<div className="flex flex-col items-center justify-center py-16 gap-3"><Loader2 size={40} className="animate-spin text-amazon-orange" /><p className="text-sm text-slate-500 font-medium">AI is building your cart...</p></div>)}
 
@@ -530,6 +569,7 @@ export default function AIDashboard() {
                       <button onClick={() => updateQty(item._id, 1)} className="rounded border p-1 hover:bg-slate-100"><Plus size={12} /></button>
                     </div>
                     <p className="text-sm font-semibold text-slate-900 w-16 text-right">${(item.price * item.qty).toFixed(2)}</p>
+                    <button onClick={() => setBuyNowProduct(item)} className="rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 px-2 py-1 text-[10px] font-bold flex items-center gap-0.5 transition" title="Buy this item instantly"><Zap size={10} /> Buy</button>
                     <button onClick={() => removeItem(item._id)} className="text-slate-400 hover:text-red-500"><Trash2 size={14} /></button>
                   </div>
                 ))}
@@ -579,6 +619,11 @@ export default function AIDashboard() {
           </div>
         )}
       </div>
+
+      {/* Buy Now Overlay */}
+      {buyNowProduct && (
+        <BuyNowOverlay product={buyNowProduct} onClose={() => setBuyNowProduct(null)} />
+      )}
     </div>
   );
 }
