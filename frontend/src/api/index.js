@@ -26,7 +26,8 @@ export default api;
 export const catalog = {
   getAll: (params) => api.get('/catalog', { params }),
   getCategories: () => api.get('/catalog/categories'),
-  getById: (id) => api.get(`/catalog/${id}`)
+  getById: (id) => api.get(`/catalog/${id}`),
+  getRecommended: (params) => api.get('/catalog/recommended', { params })
 };
 
 // ─── Intent (NLP parsing) ────────────────────────────────────────────────────

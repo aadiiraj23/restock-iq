@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Star, Truck, Zap } from 'lucide-react';
+import { Star, Truck, Zap, Tag } from 'lucide-react';
 import { useCartStore } from '../store';
 import BuyNowOverlay from './BuyNowOverlay';
 
-export default function ProductCard({ product, onCompare, showRank, compact }) {
+export default function ProductCard({ product, onCompare, showRank, compact, recommendationReason }) {
   const addItem = useCartStore(s => s.addItem);
   const [showBuyNow, setShowBuyNow] = useState(false);
   const discount = product.originalPrice ? Math.round((1 - product.price / product.originalPrice) * 100) : 0;
@@ -11,6 +11,16 @@ export default function ProductCard({ product, onCompare, showRank, compact }) {
   return (
     <>
       <div className={`product-card flex flex-col h-full ${compact ? 'p-3' : ''}`}>
+        {/* Recommendation reason badge */}
+        {recommendationReason && (
+          <div className="flex items-start gap-1 mb-2 px-1">
+            <Tag size={11} className="text-emerald-600 mt-0.5 shrink-0" />
+            <span className="text-[11px] text-emerald-700 font-medium leading-tight line-clamp-2">
+              {recommendationReason}
+            </span>
+          </div>
+        )}
+
         <div className="relative mb-3">
           <img src={product.image} alt={product.name} className={`w-full object-contain bg-white mx-auto ${compact ? 'h-32' : 'h-44'}`} loading="lazy" />
           {showRank && product.rankReason && (
@@ -37,9 +47,9 @@ export default function ProductCard({ product, onCompare, showRank, compact }) {
         </div>
 
         <div className="mb-2">
-          <span className="text-lg font-medium">${product.price?.toFixed(2)}</span>
+          <span className="text-lg font-medium">₹{product.price?.toFixed(2)}</span>
           {product.originalPrice && (
-            <span className="text-xs text-gray-500 line-through ml-1">${product.originalPrice.toFixed(2)}</span>
+            <span className="text-xs text-gray-500 line-through ml-1">₹{product.originalPrice.toFixed(2)}</span>
           )}
         </div>
 

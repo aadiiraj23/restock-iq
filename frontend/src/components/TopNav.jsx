@@ -71,7 +71,7 @@ export default function TopNav({ onCartClick }) {
           <Link to="/ai" className="flex items-center gap-1 shrink-0 hover:underline font-medium">
             <Menu size={16} /> AI Prompt Dashboard
           </Link>
-          <Link to="/" className="shrink-0 hover:underline">Today's Deals</Link>
+          <Link to="/" className="shrink-0 hover:underline">Recommended</Link>
           <Link to="/category/snacks" className="shrink-0 hover:underline">Snacks</Link>
           <Link to="/category/medicine" className="shrink-0 hover:underline">Health</Link>
           <Link to="/category/cleaning" className="shrink-0 hover:underline">Cleaning</Link>

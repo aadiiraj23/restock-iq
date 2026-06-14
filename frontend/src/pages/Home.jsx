@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, Zap } from 'lucide-react';
+import { ChevronRight, Zap, Sparkles } from 'lucide-react';
 import ProductCard from '../components/ProductCard';
 import { catalog } from '../api';
 
 export default function Home() {
   const [products, setProducts] = useState([]);
+  const [recommended, setRecommended] = useState([]);
   const [categories, setCategories] = useState([]);
 
   useEffect(() => {
     catalog.getAll({ limit: 12 }).then(r => setProducts(r.data));
     catalog.getCategories().then(r => setCategories(r.data));
+    catalog.getRecommended({ limit: 12 }).then(r => setRecommended(r.data)).catch(() => {});
   }, []);
 
   return (
@@ -70,14 +72,19 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Deals */}
+      {/* Recommended for You */}
       <div className="max-w-[1500px] mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">Today's Deals</h2>
-          <Link to="/search" className="amazon-link text-sm">See all deals</Link>
+          <div className="flex items-center gap-2">
+            <Sparkles size={20} className="text-amazon-orange" />
+            <h2 className="text-xl font-bold">Recommended for You</h2>
+          </div>
+          <Link to="/search" className="amazon-link text-sm">See all</Link>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {products.slice(0, 12).map(p => <ProductCard key={p._id} product={p} />)}
+          {(recommended.length > 0 ? recommended : products).slice(0, 12).map(p => (
+            <ProductCard key={p._id} product={p} recommendationReason={p.recommendationReason} />
+          ))}
         </div>
       </div>
 
