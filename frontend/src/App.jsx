@@ -1,8 +1,10 @@
 import { Routes, Route } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import TopNav from './components/TopNav';
 import Footer from './components/Footer';
 import CartDrawer from './components/CartDrawer';
+import PriceDropAlert from './components/PriceDropAlert';
+import WeeklyAutoOrder from './components/WeeklyAutoOrder';
 import Home from './pages/Home';
 import AIDashboard from './pages/AIDashboard';
 import IntentResults from './pages/IntentResults';
@@ -20,6 +22,21 @@ import RestockNotifications from './pages/RestockNotifications';
 
 export default function App() {
   const [cartOpen, setCartOpen] = useState(false);
+  const [showWeeklyOrder, setShowWeeklyOrder] = useState(false);
+
+  // Show Weekly Auto-Order notification after 60 seconds on site (simulated Monday notification)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const dismissed = sessionStorage.getItem('weeklyOrderDismissed');
+      if (!dismissed) setShowWeeklyOrder(true);
+    }, 60000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const closeWeeklyOrder = () => {
+    setShowWeeklyOrder(false);
+    sessionStorage.setItem('weeklyOrderDismissed', 'true');
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-amazon-light">
@@ -44,6 +61,10 @@ export default function App() {
       </main>
       <Footer />
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
+
+      {/* Global AI Features */}
+      <PriceDropAlert />
+      <WeeklyAutoOrder show={showWeeklyOrder} onClose={closeWeeklyOrder} />
     </div>
   );
 }

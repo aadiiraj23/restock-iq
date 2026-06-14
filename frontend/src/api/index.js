@@ -43,7 +43,11 @@ export const ai = {
   suggest: (data) => api.post('/ai/suggest', data),
   substitute: (data) => api.post('/ai/substitute', data),
   feedback: (data) => api.post('/ai/feedback', data),
-  insights: () => api.get('/ai/insights')
+  insights: () => api.get('/ai/insights'),
+  context: (data) => api.post('/ai/context', data),
+  panic: () => api.post('/ai/panic'),
+  mood: (data) => api.post('/ai/mood', data),
+  moods: () => api.get('/ai/moods')
 };
 
 // ─── Cart ────────────────────────────────────────────────────────────────────

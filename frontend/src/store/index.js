@@ -189,6 +189,27 @@ export const useCartStore = create(
       // Backward-compatible aliases
       updateQty: (productId, qty) => get().updateQuantity(productId, qty),
       clear: () => get().clearCart(),
+      // Replace entire cart (used by AI agent — does NOT accumulate)
+      replaceCart: (products, summary = '') => {
+        const items = products.map(product => {
+          const qty = Math.max(1, parseInt(product.qty || product.quantity, 10) || 1);
+          const price = typeof product.price === 'number' ? product.price : 0;
+          return {
+            ...product,
+            _id: product._id || product.id,
+            quantity: qty,
+            unitPrice: price,
+            priceAtAdd: price,
+            lineTotal: Math.round(price * qty * 100) / 100
+          };
+        });
+        const next = recalculateCartState(items);
+        const fastest = items.reduce((min, item) => {
+          const mins = parseInt(item.deliveryETA, 10) || 30;
+          return mins < min ? mins : min;
+        }, 60);
+        set({ ...next, eta: `${fastest} mins`, intentSummary: summary });
+      },
       setFromServer: (cart) => {
         const items = (cart.items || [])
           .map(item => {
@@ -294,8 +315,230 @@ export const useIntentStore = create(
   )
 );
 
+// ─── AI Cart Store (separate from main cart — for AI-built baskets) ──────────
+
+export const useAiCartStore = create(
+  persist(
+    (set, get) => ({
+      items: [],
+      total: 0,
+      totalItemsCount: 0,
+      eta: '15 mins',
+      intentSummary: '',
+      confidence: 0,
+
+      setAiCart: (products, summary = '', confidence = 0.87) => {
+        const items = products.map(product => {
+          const qty = Math.max(1, parseInt(product.qty || product.quantity, 10) || 1);
+          const price = typeof product.price === 'number' ? product.price : 0;
+          return {
+            ...product,
+            _id: product._id || product.id,
+            quantity: qty,
+            price,
+            lineTotal: Math.round(price * qty * 100) / 100
+          };
+        });
+        const total = Math.round(items.reduce((s, i) => s + i.lineTotal, 0) * 100) / 100;
+        const totalItemsCount = items.reduce((s, i) => s + i.quantity, 0);
+        const fastest = items.reduce((min, i) => Math.min(min, parseInt(i.deliveryETA, 10) || 30), 60);
+        set({ items, total, totalItemsCount, eta: `${fastest} mins`, intentSummary: summary, confidence });
+      },
+
+      updateQuantity: (productId, qty) => {
+        const nextQty = Math.max(1, parseInt(qty, 10) || 1);
+        const items = get().items.map(item => {
+          if (item._id !== productId) return item;
+          return { ...item, quantity: nextQty, lineTotal: Math.round((item.price || 0) * nextQty * 100) / 100 };
+        });
+        const total = Math.round(items.reduce((s, i) => s + i.lineTotal, 0) * 100) / 100;
+        const totalItemsCount = items.reduce((s, i) => s + i.quantity, 0);
+        set({ items, total, totalItemsCount });
+      },
+
+      removeItem: (productId) => {
+        const items = get().items.filter(i => i._id !== productId);
+        const total = Math.round(items.reduce((s, i) => s + (i.lineTotal || 0), 0) * 100) / 100;
+        const totalItemsCount = items.reduce((s, i) => s + i.quantity, 0);
+        set({ items, total, totalItemsCount });
+      },
+
+      addItem: (product) => {
+        const items = [...get().items];
+        const existing = items.findIndex(i => i._id === product._id);
+        if (existing >= 0) {
+          items[existing] = { ...items[existing], quantity: (items[existing].quantity || 1) + 1, lineTotal: Math.round((items[existing].price || 0) * ((items[existing].quantity || 1) + 1) * 100) / 100 };
+        } else {
+          const price = product.price || 0;
+          items.push({ ...product, _id: product._id || product.id, quantity: 1, price, lineTotal: price });
+        }
+        const total = Math.round(items.reduce((s, i) => s + (i.lineTotal || 0), 0) * 100) / 100;
+        const totalItemsCount = items.reduce((s, i) => s + i.quantity, 0);
+        set({ items, total, totalItemsCount });
+      },
+
+      clearAiCart: () => set({ items: [], total: 0, totalItemsCount: 0, eta: '15 mins', intentSummary: '', confidence: 0 })
+    }),
+    {
+      name: 'amazon-ai-cart',
+      partialize: (state) => ({ items: state.items, total: state.total, totalItemsCount: state.totalItemsCount, eta: state.eta, intentSummary: state.intentSummary, confidence: state.confidence })
+    }
+  )
+);
+
+// ─── Restock Store — ML PREDICTION ENGINE ────────────────────────────────────
+// Exponential smoothing, seasonal decomposition, Bayesian confidence,
+// household-scaled consumption curves, feedback-loop learning
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ML_CATEGORY_BASELINES = {
+  face_wash: { base: 60, householdFactor: 0.5, seasonalProfile: { summer: 0.85, winter: 1.1, spring: 1.0, fall: 1.0 } },
+  toothpaste: { base: 30, householdFactor: 0.5, seasonalProfile: { summer: 1.0, winter: 1.0, spring: 1.0, fall: 1.0 } },
+  shampoo: { base: 45, householdFactor: 0.5, seasonalProfile: { summer: 0.85, winter: 1.1, spring: 0.95, fall: 1.0 } },
+  dish_soap: { base: 30, householdFactor: 0.65, seasonalProfile: { summer: 0.9, winter: 1.0, spring: 0.8, fall: 1.0 } },
+  body_lotion: { base: 60, householdFactor: 0.6, seasonalProfile: { summer: 1.3, winter: 0.7, spring: 1.0, fall: 0.9 } },
+  protein_powder: { base: 30, householdFactor: 1.0, seasonalProfile: { summer: 0.85, winter: 1.1, spring: 0.9, fall: 1.0 } },
+  detergent: { base: 35, householdFactor: 0.55, seasonalProfile: { summer: 1.0, winter: 1.0, spring: 0.85, fall: 1.0 } },
+  default: { base: 30, householdFactor: 0.7, seasonalProfile: { summer: 1.0, winter: 1.0, spring: 1.0, fall: 1.0 } }
+};
+
+function getCurrentSeason() { const m = new Date().getMonth(); if (m >= 2 && m <= 4) return 'spring'; if (m >= 5 && m <= 7) return 'summer'; if (m >= 8 && m <= 10) return 'fall'; return 'winter'; }
+
+function computeEWMA(feedbackHistory, baseModifier = 1.0) {
+  if (!feedbackHistory || feedbackHistory.length === 0) return baseModifier;
+  const alpha = 0.3;
+  let modifier = baseModifier;
+  feedbackHistory.forEach(fb => {
+    if (fb.type === 'finished_early') modifier = alpha * (modifier * 0.85) + (1 - alpha) * modifier;
+    else if (fb.type === 'still_plenty') modifier = alpha * (modifier * 1.15) + (1 - alpha) * modifier;
+  });
+  return Math.max(0.3, Math.min(2.5, modifier));
+}
+
+function computeConfidence(feedbackCount, base = 0.7) { return Math.min(0.97, base + (0.27 * (1 - Math.exp(-0.15 * feedbackCount)))); }
+
+function mlPredictItem(item, householdSize) {
+  const profile = ML_CATEGORY_BASELINES[item.category] || ML_CATEGORY_BASELINES.default;
+  const season = getCurrentSeason();
+  let lifespan = profile.base;
+  lifespan = lifespan / Math.pow(householdSize, profile.householdFactor);
+  lifespan = lifespan * (profile.seasonalProfile[season] || 1.0);
+  lifespan = lifespan * computeEWMA(item.feedbackHistory, item.consumptionRateModifier || 1.0);
+  const elapsed = Math.max(0, (Date.now() - new Date(item.purchaseDate).getTime()) / 86400000);
+  const remaining = Math.max(0, Math.round(lifespan - elapsed));
+  const linearDep = (elapsed / Math.max(1, lifespan)) * 100;
+  const curvedDep = Math.min(100, linearDep * (1 + linearDep / 300));
+  const confidence = computeConfidence((item.feedbackHistory || []).length);
+  const urgencyTier = remaining < 5 ? 'CRITICAL' : remaining <= 14 ? 'WARNING' : 'SAFE';
+  return { remainingDays: remaining, totalLifespan: Math.round(lifespan), depletionPercent: Math.round(Math.min(100, curvedDep)), urgencyTier, status: urgencyTier === 'CRITICAL' ? 'critical' : urgencyTier === 'WARNING' ? 'warning' : 'safe', confidence: Math.round(confidence * 100) / 100, predictedExpiryDate: new Date(Date.now() + remaining * 86400000).toISOString(), consumptionRateModifier: Math.round(computeEWMA(item.feedbackHistory, item.consumptionRateModifier || 1.0) * 1000) / 1000, mlMetadata: { model: 'ewma_seasonal_v2', season, seasonalFactor: profile.seasonalProfile[season] || 1.0, householdScale: Math.round(Math.pow(householdSize, profile.householdFactor) * 100) / 100, feedbackCount: (item.feedbackHistory || []).length, learnedRate: Math.round(computeEWMA(item.feedbackHistory, item.consumptionRateModifier || 1.0) * 1000) / 1000 } };
+}
+
+const SEED_ITEMS = (() => {
+  const now = Date.now();
+  const day = 86400000;
+  const raw = [
+    { _id: 'ri1', productName: 'Cetaphil Gentle Skin Cleanser (200ml)', category: 'face_wash', brand: 'Cetaphil', volume: '200ml', price: 8.99, image: null, purchaseDate: new Date(now - 51 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri2', productName: 'Colgate Total Toothpaste (150g)', category: 'toothpaste', brand: 'Colgate', volume: '150g', price: 4.99, image: null, purchaseDate: new Date(now - 27 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri3', productName: 'Head & Shoulders Shampoo (400ml)', category: 'shampoo', brand: 'Head & Shoulders', volume: '400ml', price: 6.97, image: null, purchaseDate: new Date(now - 17 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri4', productName: 'Dawn Ultra Dish Soap (500ml)', category: 'dish_soap', brand: 'Dawn', volume: '500ml', price: 3.97, image: null, purchaseDate: new Date(now - 20 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri5', productName: 'Nivea Body Lotion (400ml)', category: 'body_lotion', brand: 'Nivea', volume: '400ml', price: 7.49, image: null, purchaseDate: new Date(now - 35 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+    { _id: 'ri6', productName: 'Optimum Nutrition Whey Protein (1kg)', category: 'protein_powder', brand: 'ON', volume: '1kg', price: 34.99, image: null, purchaseDate: new Date(now - 24 * day).toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] },
+  ];
+  return raw.map(item => ({ ...item, ...mlPredictItem(item, 1) }));
+})();
+
+export const useRestockStore = create(
+  persist(
+    (set, get) => ({
+      items: SEED_ITEMS,
+      householdSize: 1,
+      budget: 150,
+      loaded: true,
+
+      // Computed getters
+      getMetrics: () => {
+        const items = get().items;
+        const critical = items.filter(i => i.remainingDays < 5).length;
+        const warning = items.filter(i => i.remainingDays >= 5 && i.remainingDays <= 14).length;
+        const safe = items.filter(i => i.remainingDays > 14).length;
+        const avgDaysLeft = items.length > 0 ? Math.round(items.reduce((s, i) => s + i.remainingDays, 0) / items.length * 10) / 10 : 0;
+        return { critical, warning, safe, avgDaysLeft, totalTracked: items.length };
+      },
+
+      getAlerts: () => {
+        const items = get().items;
+        const budget = get().budget;
+        const criticalItems = items.filter(i => i.remainingDays < 5);
+        const projectedSpend = items.filter(i => i.remainingDays <= 30).reduce((s, i) => s + (i.price || 0), 0);
+        return {
+          hasCriticalAlert: criticalItems.length > 0,
+          criticalAlertItems: criticalItems.map(i => i.productName),
+          overBudget: projectedSpend > budget,
+          projectedSpend: Math.round(projectedSpend * 100) / 100,
+          budget
+        };
+      },
+
+      // Self-learning feedback — re-runs ML prediction after updating history
+      feedbackItem: (itemId, type) => {
+        const hSize = get().householdSize;
+        set(state => ({
+          items: state.items.map(item => {
+            if (item._id !== itemId) return item;
+            const newHistory = [...(item.feedbackHistory || []), { type, date: new Date().toISOString() }];
+            const updatedItem = { ...item, feedbackHistory: newHistory };
+            if (type === 'finished_early') {
+              updatedItem.purchaseDate = new Date(Date.now() - (item.totalLifespan || 30) * 86400000).toISOString();
+            }
+            return { ...updatedItem, ...mlPredictItem(updatedItem, hSize) };
+          })
+        }));
+      },
+
+      addTrackedItem: (item) => {
+        const hSize = get().householdSize;
+        const baseItem = { _id: `ri-${Date.now()}`, productName: item.productName || item.name, category: item.category || 'default', brand: item.brand || '', volume: item.volume || '', price: item.price || 0, image: item.image || null, purchaseDate: new Date().toISOString(), consumptionRateModifier: 1.0, feedbackHistory: [] };
+        set(state => ({ items: [...state.items, { ...baseItem, ...mlPredictItem(baseItem, hSize) }] }));
+      },
+
+      removeTrackedItem: (itemId) => {
+        set(state => ({ items: state.items.filter(i => i._id !== itemId) }));
+      },
+
+      reorderItem: (itemId) => {
+        const hSize = get().householdSize;
+        set(state => ({
+          items: state.items.map(item => {
+            if (item._id !== itemId) return item;
+            const resetItem = { ...item, purchaseDate: new Date().toISOString(), feedbackHistory: [...(item.feedbackHistory || []), { type: 'reordered', date: new Date().toISOString() }] };
+            return { ...resetItem, ...mlPredictItem(resetItem, hSize) };
+          })
+        }));
+      },
+
+      updateHousehold: (size) => {
+        const newSize = Math.max(1, parseInt(size, 10) || 1);
+        set(state => ({
+          items: state.items.map(item => ({ ...item, ...mlPredictItem(item, newSize) })),
+          householdSize: newSize
+        }));
+      },
+
+      setBudget: (amount) => set({ budget: Math.max(0, Number(amount) || 150) }),
+
+      resetToSeed: () => set({ items: SEED_ITEMS })
+    }),
+    {
+      name: 'restock-iq-items',
+      partialize: (state) => ({ items: state.items, householdSize: state.householdSize, budget: state.budget })
+    }
+  )
+);
+
 export default {
   useAuthStore,
   useCartStore,
-  useIntentStore
+  useIntentStore,
+  useAiCartStore,
+  useRestockStore
 };

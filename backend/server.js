@@ -12,6 +12,7 @@ const checkoutRoutes = require('./routes/checkout');
 const restockRoutes = require('./routes/restock');
 const feedbackRoutes = require('./routes/feedback');
 const aiRoutes = require('./routes/ai');
+const consumptionRoutes = require('./routes/consumption');
 
 // ML Model Manager
 const { trainModels, getModelStatus, needsRetraining } = require('./services/mlModels');
@@ -36,6 +37,7 @@ app.use('/api/checkout', checkoutRoutes);
 app.use('/api/restock', restockRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/items', consumptionRoutes);
 app.use('/api/orders', checkoutRoutes);
 
 // ─── ML Model Training Endpoint (manual retrain) ─────────────────────────────

@@ -13,6 +13,7 @@ const User = require('../models/User');
 const { processPromptWithAI, processAIShoppingRequest, generateSuggestions } = require('../services/aiService');
 const { scoreSubstitutes } = require('../services/scoringEngine');
 const { processFeedback } = require('../services/feedbackLearner');
+const { buildAmbientContext, updateSession, getPanicModeCart, getMoodBundle, MOOD_BUNDLES } = require('../services/contextEngine');
 const { authRequired, authOptional } = require('../middleware/auth');
 
 const router = express.Router();
@@ -35,6 +36,10 @@ router.post('/shop', authRequired, async (req, res) => {
     }
 
     const activeUserId = String(req.user.id);
+
+    // Build ambient context (time, history, emotion, urgency)
+    const ambientContext = await buildAmbientContext(activeUserId, prompt);
+
     const [allProducts, activeUser] = await Promise.all([
       Product.find({}).lean(),
       User.findById(activeUserId).select('-password').lean()
@@ -48,6 +53,9 @@ router.post('/shop', authRequired, async (req, res) => {
       filters
     });
 
+    // Update session memory
+    updateSession(activeUserId, prompt, requestResult.parsedSlots, requestResult.products);
+
     const intent = await IntentRequest.create({
       userId: activeUserId,
       rawText: prompt,
@@ -60,6 +68,16 @@ router.post('/shop', authRequired, async (req, res) => {
       recommendedProductIds: requestResult.products.map(p => p._id).filter(Boolean)
     });
 
+    // Build "Buy All" and "Essentials" baskets
+    const buyAllBasket = requestResult.products.map(p => ({ _id: p._id, name: p.name, price: p.price, qty: 1, image: p.image }));
+    const essentialsBasket = requestResult.products.slice(0, 3).map(p => ({ _id: p._id, name: p.name, price: p.price, qty: 1, image: p.image }));
+
+    // Smart upsell from restock urgency or co-occurrence
+    const smartUpsell = ambientContext.restockUrgent[0] || (requestResult.alsoNeeded[0] ? {
+      name: requestResult.alsoNeeded[0].name || 'Related item',
+      reason: 'Frequently bought together'
+    } : null);
+
     res.json({
       success: true,
       intentId: intent._id,
@@ -67,10 +85,35 @@ router.post('/shop', authRequired, async (req, res) => {
       products: requestResult.products,
       alsoNeeded: requestResult.alsoNeeded,
       parsedSlots: requestResult.parsedSlots,
+      // New context-aware fields
+      ambientContext: {
+        timePeriod: ambientContext.time.period,
+        dayPattern: ambientContext.time.dayPattern,
+        mood: ambientContext.ambient.mood,
+        urgencyDetected: ambientContext.user.urgencyLevel,
+        emotionalState: ambientContext.user.emotionalState.state,
+        isListMode: ambientContext.user.isListMode,
+        listItems: ambientContext.user.listItems,
+        needsClarification: ambientContext.user.needsClarification,
+        boostCategories: ambientContext.ambient.boostCategories
+      },
+      baskets: {
+        buyAll: { items: buyAllBasket, total: buyAllBasket.reduce((s, i) => s + i.price, 0), eta: requestResult.products[0]?.deliveryETA || '30 mins' },
+        essentials: { items: essentialsBasket, total: essentialsBasket.reduce((s, i) => s + i.price, 0), eta: requestResult.products[0]?.deliveryETA || '30 mins' }
+      },
+      smartUpsell,
+      reasoning_trace: {
+        type: 'ai_shopping',
+        context_injected: [`time: ${ambientContext.time.period}`, `day: ${ambientContext.time.dayName}`, `mood: ${ambientContext.ambient.mood}`],
+        urgency: ambientContext.user.urgencyLevel,
+        emotion: ambientContext.user.emotionalState.state,
+        history_signals: ambientContext.history.orderCount > 0 ? `${ambientContext.history.orderCount} orders, last ${ambientContext.history.daysSinceLastOrder} days ago` : 'new user',
+        session_turn: ambientContext.session.turnCount
+      },
       meta: {
         totalProductsSearched: allProducts.length,
         matchesFound: requestResult.products.length,
-        processingMethod: 'processAIShoppingRequest',
+        processingMethod: 'processAIShoppingRequest+contextEngine',
         authenticatedUserId: activeUserId
       }
     });
@@ -242,6 +285,123 @@ router.post('/classify', async (req, res) => {
     topCategory: predictions[0]?.label || 'general',
     confidence: predictions[0]?.probability || 0
   });
+});
+
+/**
+ * POST /api/ai/context
+ * Get ambient context for the current user/session.
+ * Used by frontend to show AI reasoning and context chips.
+ */
+router.post('/context', authOptional, async (req, res) => {
+  try {
+    const { prompt = '' } = req.body;
+    const context = await buildAmbientContext(req.user?.id, prompt);
+    res.json(context);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to build context', details: err.message });
+  }
+});
+
+/**
+ * POST /api/ai/panic
+ * Panic Mode — instant checkout with most-ordered items.
+ * Returns pre-built cart based on user's top 10 most-ordered items (30 days).
+ */
+router.post('/panic', authRequired, async (req, res) => {
+  try {
+    const panicCart = await getPanicModeCart(req.user.id);
+    res.json({
+      success: true,
+      mode: 'panic',
+      ...panicCart,
+      reasoning_trace: {
+        type: 'panic_mode',
+        explanation: panicCart.reasoning,
+        filters_applied: panicCart.isLateNight ? ['night_delivery_only'] : [],
+        safety_check: panicCart.hasRecentOrder ? 'recent_order_warning' : 'clear'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Panic mode failed', details: err.message });
+  }
+});
+
+/**
+ * POST /api/ai/mood
+ * Mood-Based Discovery — curated bundles based on moment/mood.
+ */
+router.post('/mood', authOptional, async (req, res) => {
+  try {
+    const { mood } = req.body;
+    if (!mood) return res.status(400).json({ error: 'mood is required', availableMoods: Object.keys(MOOD_BUNDLES) });
+
+    const bundle = getMoodBundle(mood);
+    const products = await Product.find({
+      stock: { $gt: 0 },
+      $or: [
+        { category: { $in: bundle.categories } },
+        { tags: { $in: bundle.tags } },
+        { name: { $regex: bundle.tags.join('|'), $options: 'i' } }
+      ]
+    }).limit(bundle.maxItems).lean();
+
+    // Find a surprise item (different category, good rating)
+    const surpriseItem = await Product.findOne({
+      stock: { $gt: 0 },
+      category: { $nin: bundle.categories },
+      rating: { $gte: 4.3 }
+    }).lean();
+
+    res.json({
+      success: true,
+      bundle_name: mood.replace(/_/g, ' '),
+      tagline: bundle.tagline,
+      mood,
+      products: products.map(p => ({
+        _id: p._id,
+        name: p.name,
+        brand: p.brand,
+        price: p.price,
+        image: p.image,
+        category: p.category,
+        rating: p.rating,
+        deliveryETA: p.deliveryETA,
+        reason: `Fits the ${mood.replace(/_/g, ' ')} vibe`
+      })),
+      surprise_item: surpriseItem ? {
+        _id: surpriseItem._id,
+        name: surpriseItem.name,
+        brand: surpriseItem.brand,
+        price: surpriseItem.price,
+        image: surpriseItem.image,
+        reason: 'Something you haven\'t tried but fits perfectly'
+      } : null,
+      total: products.reduce((s, p) => s + p.price, 0),
+      reasoning_trace: {
+        type: 'mood_discovery',
+        mood_detected: mood,
+        categories_searched: bundle.categories,
+        tags_matched: bundle.tags,
+        products_found: products.length
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Mood discovery failed', details: err.message });
+  }
+});
+
+/**
+ * GET /api/ai/moods
+ * List available mood/moment options.
+ */
+router.get('/moods', (req, res) => {
+  const moods = Object.entries(MOOD_BUNDLES).map(([key, bundle]) => ({
+    id: key,
+    label: key.replace(/_/g, ' '),
+    tagline: bundle.tagline,
+    categories: bundle.categories
+  }));
+  res.json(moods);
 });
 
 module.exports = router;
