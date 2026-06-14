@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const productImages = require('./productImages');
 
 // ─── Load Dataset ────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ function transformProduct(item) {
     deliveryETA: `${item.amazon_fulfillment.avg_delivery_days * 24 * 60} mins`,
     rating: item.rating,
     reviewCount: item.review_count,
-    image: item.image_url,
+    image: productImages[item.product_id] || item.image_url,
     description: `${item.name} - ${item.brand} ${item.subcategory}`,
     tags: item.tags || [],
     isPrime: item.amazon_fulfillment.prime_eligible,
